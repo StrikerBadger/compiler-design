@@ -494,8 +494,9 @@ let pair_up (x:'a) : ('a * 'a) = (x, x)
   Complete the definition of third_of_three; be sure to give it
   the correct type signature:
 *)
-let third_of_three _ = failwith
-  "third_of_three unimplemented"
+let third_of_three (t:'a * 'b * 'c) : 'c = 
+  match t with
+    | (_, _, x) -> x
 
 
 (*
@@ -508,7 +509,8 @@ let third_of_three _ = failwith
 *)
 
 let compose_pair (p:(('b -> 'c) * ('a -> 'b))) : 'a -> 'c =
-  failwith "compose_pair unimplemented"
+  match p with
+    | (f, g) -> (fun x -> f (g x))
 
 
 
@@ -539,7 +541,7 @@ let list1 : int list = 3::2::1::[]
 let list1' = [3;2;1]     (* this is equivalent to list1 *)
 
 (* Lists are homogeneous -- they hold values of only one type: *)
-(* Uncomment to get a type error; recommend to compile:
+(* Uncomment to get a type error; recomment to compile:
 let bad_list = [1;"hello";true]
 *)
 
@@ -682,7 +684,9 @@ let rec mylist_to_list (l:'a mylist) : 'a list =
   the inverse of the mylist_to_list function given above.
 *)
 let rec list_to_mylist (l:'a list) : 'a mylist =
-  failwith "list_to_mylist unimplemented"
+  match l with
+    | [] -> Nil
+    | h::tl -> Cons(h, list_to_mylist tl)
 
 
 (*
@@ -699,7 +703,9 @@ let rec list_to_mylist (l:'a list) : 'a mylist =
   append.  So (List.append [1;2] [3]) is the same as  ([1;2] @ [3]).
 *)
 let rec append (l1:'a list) (l2:'a list) : 'a list =
-  failwith "append unimplemented"
+  match l2 with
+    | [] -> l1
+    | h::tl -> h :: (append tl l2)
 
 (*
   Problem 3-3
