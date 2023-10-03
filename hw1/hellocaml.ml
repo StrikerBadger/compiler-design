@@ -348,8 +348,7 @@ let centimes_of : int -> int -> int =
   will need to remove the function body starting with failwith and replace it
   with something else.
 *)
-let prob3_ans : int  = 
-  fun _ -> failwith "Problem 3 case1 test unimplemented"
+let prob3_ans : int  = 42
 
 (*
   Edit the function argument of the "Student-Provided Problem 3" test in
