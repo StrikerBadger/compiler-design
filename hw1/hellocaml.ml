@@ -703,8 +703,8 @@ let rec list_to_mylist (l:'a list) : 'a mylist =
   append.  So (List.append [1;2] [3]) is the same as  ([1;2] @ [3]).
 *)
 let rec append (l1:'a list) (l2:'a list) : 'a list =
-  match l2 with
-    | [] -> l1
+  match l1 with
+    | [] -> l2
     | h::tl -> h :: (append tl l2)
 
 (*
@@ -714,7 +714,9 @@ let rec append (l1:'a list) (l2:'a list) : 'a list =
   you might want to call append.  Do not use the library function.
 *)
 let rec rev (l:'a list) : 'a list =
-  failwith "rev unimplemented"
+  match l with
+    | [] -> []
+    | h::tl -> append (rev tl) [h]
 
 (*
   Problem 3-4
@@ -728,7 +730,8 @@ let rec rev (l:'a list) : 'a list =
 let rev_t (l: 'a list) : 'a list =
   let rec rev_aux l acc =
     begin match l with
-      | _ -> failwith "rev_t unimplemented"
+      | [] -> acc
+      | h::tl -> rev_aux tl (h::acc)
     end
   in
   rev_aux l []
@@ -748,7 +751,12 @@ let rev_t (l: 'a list) : 'a list =
   evaluates to true or false.
 *)
 let rec insert (x:'a) (l:'a list) : 'a list =
-  failwith "insert unimplemented"
+  match l with
+  | [] -> [x]
+    | h1::tl -> if x == h1 then h1::tl else 
+      match tl with
+        | [] -> [x]
+        | h2::_ -> if x < h2 then h1::x::tl else h1::(insert x tl)
 
 
 (*
@@ -759,7 +767,9 @@ let rec insert (x:'a) (l:'a list) : 'a list =
   Hint: you might want to use the insert function that you just defined.
 *)
 let rec union (l1:'a list) (l2:'a list) : 'a list =
-  failwith "union unimplemented"
+  match l2 with
+    | [] -> l1
+    | h::tl -> union (insert h l1) tl
 
 
 
@@ -836,7 +846,7 @@ let e3 : exp = Mult(Var "y", Mult(e2, Neg e2))     (* "y * ((x+1) * -(x+1))" *)
 (*
    Problem 4-1
 
-  Implement vars_of -- a function that, given en expression e returns
+  Implement vars_of -- a function that, given an expression e returns
   a list containing exactly the strings representing variables that appear
   in the expression. The result should be a set -- that is, it should
   contain no duplicates and be sorted (according to is_sorted).
@@ -850,7 +860,12 @@ let e3 : exp = Mult(Var "y", Mult(e2, Neg e2))     (* "y * ((x+1) * -(x+1))" *)
   Hint: you probably want to use the 'union' function you wrote for Problem 3-5.
 *)
 let rec vars_of (e:exp) : string list =
-  failwith "vars_of unimplemented"
+  match e with
+    | Var x -> [x]
+    | Const _ -> []
+    | Add (e1, e2) -> union (vars_of e1) (vars_of e2)
+    | Mult (e1, e2) -> union (vars_of e1) (vars_of e2)
+    | Neg e1 -> vars_of e1
 
 
 (*
@@ -868,8 +883,13 @@ let rec vars_of (e:exp) : string list =
   Hint: you can print the string using the print_string function.
 *)
 
-let rec string_of (e:exp) : string =
-  failwith "string_of unimplemented"
+let rec string_of (e:exp) : string = 
+  match e with
+    | Var x -> x
+    | Const x -> Int64.to_string x  
+    | Add (e1, e2) -> "(" ^ (string_of e1) ^ " + " ^ (string_of e2) ^ ")"
+    | Mult (e1, e2) -> "(" ^ (string_of e1) ^ " * " ^ (string_of e2) ^ ")"
+    | Neg e1 -> "-(" ^ (string_of e1) ^ ")"
 
 (*
   How should we _interpret_ (i.e. give meaning to) an expression?
@@ -930,7 +950,9 @@ let ctxt2 : ctxt = [("x", 2L); ("y", 7L)]  (* maps "x" to 2L, "y" to 7L *)
   such value, it should raise the Not_found exception.
 *)
 let rec lookup (x:string) (c:ctxt) : int64 =
-  failwith "unimplemented"
+  match c with
+    | [] -> raise Not_found
+    | (y, v)::tl -> if x = y then v else lookup x tl
 
 
 (*
@@ -957,7 +979,12 @@ let rec lookup (x:string) (c:ctxt) : int64 =
 *)
 
 let rec interpret (c:ctxt) (e:exp) : int64 =
-  failwith "unimplemented"
+  match e with
+    | Var x -> lookup x c
+    | Const x -> x
+    | Add (e1, e2) -> Int64.add (interpret c e1) (interpret c e2)
+    | Mult (e1, e2) -> Int64.mul (interpret c e1) (interpret c e2)
+    | Neg e1 -> Int64.neg (interpret c e1)
 
 
 (*
@@ -1003,7 +1030,15 @@ let rec interpret (c:ctxt) (e:exp) : int64 =
 *)
 
 let rec optimize (e:exp) : exp =
-  failwith "optimize unimplemented"
+  match e with
+    | Mult (Const 0L, _) -> Const 0L
+    | Mult (_, Const 0L) -> Const 0L
+    | Mult (Const 1L, se) -> optimize se
+    | Mult (se, Const 1L) -> optimize se
+    | Add (Const 0L, se) -> optimize se
+    | Add (se, Const 0L) -> optimize se
+    | Neg (Neg se) -> optimize se
+    | _ -> e
 
 
 (******************************************************************************)
