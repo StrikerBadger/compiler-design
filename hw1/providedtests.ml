@@ -8,9 +8,9 @@ open Hellocaml
 
 let provided_tests : suite = [
   Test ("Student-Provided Tests For Problem 1-3", [
-    ("case1", assert_eqf (fun () -> 42) prob3_ans );
-    ("case2", assert_eqf (fun () -> 25) (prob3_case2 17) );
-    ("case3", assert_eqf (fun () -> prob3_case3) 17);
+    ("case1", assert_eqf (fun () -> prob3_ans) 42);
+    ("case2", assert_eqf (fun () -> (prob3_case2 17)) 25);
+    ("case3", assert_eqf (fun () -> prob3_case3) 64);
   ]);
   
 ] 

@@ -753,10 +753,7 @@ let rev_t (l: 'a list) : 'a list =
 let rec insert (x:'a) (l:'a list) : 'a list =
   match l with
   | [] -> [x]
-    | h1::tl -> if x == h1 then h1::tl else 
-      match tl with
-        | [] -> [x]
-        | h2::_ -> if x < h2 then h1::x::tl else h1::(insert x tl)
+  | h1::tl -> if x == h1 then h1::tl else if x < h1 then x::h1::tl else h1::(insert x tl)
 
 
 (*
@@ -1038,6 +1035,11 @@ let rec optimize (e:exp) : exp =
     | Add (Const 0L, se) -> optimize se
     | Add (se, Const 0L) -> optimize se
     | Neg (Neg se) -> optimize se
+    | Add (Const c1, Const c2) -> Const (Int64.add c1 c2)
+    | Mult (Const c1, Const c2) -> Const (Int64.add c1 c2)
+    | Neg (Const c1) -> Const (Int64.neg c1)
+    | Add (e1, e2) -> optimize (Add (optimize e1, optimize e2))
+    | Mult (e1, e2) -> optimize (Mult (optimize e1, optimize e2))
     | _ -> e
 
 
@@ -1182,7 +1184,12 @@ let ans1 = run [] p1
    - You should test the correctness of your compiler on several examples.
 *)
 let rec compile (e:exp) : program =
-  failwith "compile unimplemented"
+  match (optimize e) with
+    | Var v -> [IPushV v]
+    | Const c -> [IPushC c]
+    | Add (e1, e2) -> append (append (compile e1) (compile e2)) [IAdd]
+    | Mult (e1, e2) -> append (append (compile e1) (compile e2)) [IMul]
+    | Neg e1 -> append (compile (e1)) [INeg]
 
 
 
