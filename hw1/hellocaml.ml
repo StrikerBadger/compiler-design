@@ -1036,10 +1036,26 @@ let rec optimize (e:exp) : exp =
     | Add (se, Const 0L) -> optimize se
     | Neg (Neg se) -> optimize se
     | Add (Const c1, Const c2) -> Const (Int64.add c1 c2)
-    | Mult (Const c1, Const c2) -> Const (Int64.add c1 c2)
-    | Neg (Const c1) -> Const (Int64.neg c1)
-    | Add (e1, e2) -> optimize (Add (optimize e1, optimize e2))
-    | Mult (e1, e2) -> optimize (Mult (optimize e1, optimize e2))
+    | Mult (Const c1, Const c2) -> Const (Int64.mul c1 c2)
+    | Add (e1, e2) -> begin match (optimize e1, optimize e2) with
+                        | (Const 0L, se) -> optimize se
+                        | (se, Const 0L) -> optimize se
+                        | (Const c1, Const c2) -> Const (Int64.add c1 c2)
+                        | (se1, se2) -> Add (se1, se2)
+                      end
+    | Mult (e1, e2) -> begin match (optimize e1, optimize e2) with
+                        | (Const 0L, _) -> Const 0L
+                        | (_, Const 0L) -> Const 0L
+                        | (Const 1L, se) -> optimize se
+                        | (se, Const 1L) -> optimize se
+                        | (Const c1, Const c2) -> Const (Int64.mul c1 c2)
+                        | (se1, se2) -> Mult (se1, se2)
+                       end
+    | Neg e1 -> begin match optimize e1 with
+                  | Neg se -> optimize se
+                  | Const c1 -> Const (Int64.neg c1)
+                  | se -> Neg se
+                end
     | _ -> e
 
 
