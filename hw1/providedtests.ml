@@ -25,8 +25,8 @@ let provided_tests : suite = [
   
     (* CUSTOM *)
     Test ("Friend Problem5", [
-      ("Friend compile1", assert_eqf (fun() -> compile e1) [IPushC 6L]);
-      ("Friend compile2", assert_eqf (fun() -> compile (Add(Const 2L, Const 3L))) ([IPushC 5L]));
+      ("Friend compile1", assert_eqf (fun() -> compile e1) [IPushC 2L; IPushC 3L; IMul]);
+      ("Friend compile2", assert_eqf (fun() -> compile (Add(Const 2L, Const 3L))) ([IPushC 2L; IPushC 3L; IAdd]));
       ("Friend compile3", assert_eqf (fun() -> compile e2) ([IPushV "x"; IPushC 1L; IAdd]));
       ("Friend compile3", assert_eqf (fun() -> compile e3) ([IPushV "y"; IPushV "x"; IPushC 1L; IAdd; IPushV "x"; IPushC 1L; IAdd; INeg; IMul; IMul]));
     ]);

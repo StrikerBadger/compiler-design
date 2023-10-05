@@ -1200,7 +1200,7 @@ let ans1 = run [] p1
    - You should test the correctness of your compiler on several examples.
 *)
 let rec compile (e:exp) : program =
-  match (optimize e) with
+  match e with
     | Var v -> [IPushV v]
     | Const c -> [IPushC c]
     | Add (e1, e2) -> append (append (compile e1) (compile e2)) [IAdd]
