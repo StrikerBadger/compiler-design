@@ -243,7 +243,7 @@ let set_cndtn_flags (op:opcode) (a:quad) (b:quad) (res:quad) (m:mach) : unit =
               m.flags.fz <- if a == 0L then m.flags.fz else Int64.equal res 0L;
               let shifted_dest = Int64.shift_right_logical b 62 in
                 m.flags.fo <- if a == 1L then (Int64.equal shifted_dest 2L) || (Int64.equal shifted_dest 1L) else m.flags.fo
-    | Shrq -> m.flags.fs <- if a == 0L then m.flags.fs else false;
+    | Shrq -> m.flags.fs <- if a == 0L then m.flags.fs else res < 0L;
               m.flags.fz <- if a == 0L then m.flags.fz else Int64.equal res 0L;
               m.flags.fo <- if a == 1L then b < 0L else m.flags.fo
     | _ -> failwith "Tried to set condition flags for non-supported operation"
@@ -304,7 +304,7 @@ let step (m:mach) : unit = if m.regs.(rind Rip) == exit_addr then () else
                         if interp_cnd m.flags cc then m.regs.(rind Rip) <- take_quad src m else ()
             (*Arithmetic instructions*)
             | Negq -> let dst = List.hd operands in
-                        let res = Int64.mul (take_quad dst m) Int64.minus_one in
+                        let res = Int64.neg (take_quad dst m) in
                           set_cndtn_flags Negq 0L 0L res m;
                           put_quad dst res m
             | Addq -> let src = (List.hd operands) in
