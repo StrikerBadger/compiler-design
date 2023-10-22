@@ -162,7 +162,7 @@ let rec save_sbytes_to_mem_helper (i:int) (loc:quad) (data:sbyte list) (s:mach) 
     | [] -> ()
     | b::bs -> let mem_index = map_addr (Int64.add loc (Int64.of_int i)) in
                                 match mem_index with
-                                  | None -> raise X86lite_segfault
+                                  | None -> ()
                                   | Some mem_index -> s.mem.(mem_index) <- b;
                                 save_sbytes_to_mem_helper (i+1) loc bs s
 
@@ -189,7 +189,7 @@ let take_sbytes_from_mem (loc:quad) (n:int) (s:mach) : sbyte list =
       | 0 -> []
       | _ -> let mem_index = map_addr (Int64.add loc (Int64.of_int i)) in
               match mem_index with
-                | None -> raise X86lite_segfault
+                | None -> []
                 | Some mem_index -> s.mem.(mem_index)::(take_sbytes_from_mem_helper (i+1) loc (n-1) s)
   in take_sbytes_from_mem_helper 0 loc n s
 
@@ -242,7 +242,7 @@ let set_cndtn_flags (op:opcode) (a:quad) (b:quad) (res:quad) (m:mach) : unit =
     | Shlq -> m.flags.fs <- if a == 0L then m.flags.fs else res < 0L;
               m.flags.fz <- if a == 0L then m.flags.fs else Int64.equal res 0L;
               let shifted_dest = Int64.shift_right_logical b 62 in
-                m.flags.fo <- if a == 1L then (Int64.equal shifted_dest 3L) || (Int64.equal shifted_dest 1L) else m.flags.fo
+                m.flags.fo <- if a == 1L then (Int64.equal shifted_dest 2L) || (Int64.equal shifted_dest 1L) else m.flags.fo
     | Shrq -> m.flags.fs <- if a == 0L then m.flags.fs else false;
               m.flags.fz <- if a == 0L then m.flags.fs else Int64.equal res 0L;
               m.flags.fo <- if a == 1L then b < 0L else m.flags.fo
