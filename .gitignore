@@ -42,3 +42,5 @@ output
 
 main.native
 main.byte
+
+.DS_Store
