@@ -270,9 +270,15 @@ let step (m:mach) : unit = if m.regs.(rind Rip) == exit_addr then () else
         let operands = snd instruction in
           match operation with
             (*Data-movement instructions*)
-            | Leaq -> let ind = List.hd operands in
+            | Leaq -> (
+                      let ind = List.hd operands in
                         let dst = List.hd (List.tl operands) in
-                          put_quad dst (take_quad ind m) m
+                          match ind with
+                            | Ind1 (Lit q) -> put_quad dst q m
+                            | Ind2 r -> put_quad dst m.regs.(rind r) m
+                            | Ind3 ((Lit q), r) -> put_quad dst (Int64.add q (m.regs.(rind r))) m
+                            | _ -> ()
+                      )
             | Movq -> let src = List.hd operands in
                         let dst = List.hd (List.tl operands) in
                           put_quad dst (take_quad src m) m
