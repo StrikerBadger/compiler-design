@@ -443,78 +443,70 @@ let translate_labels (opt : int) (st, addr_acc) (e : elem) : ((sym_tab list) * i
     | 0, Text t ->
         let new_acc = Int64.add addr_acc (Int64.of_int ((List.length t) * 8)) in
         let addr = find_label st e.lbl 0 in
-          if addr = (-1L)
-          then ((List.append st [ ((e.lbl), addr_acc) ]), new_acc)
-          else raise (Redefined_sym e.lbl)
+          begin match addr with 
+            | -1L -> List.append st [(e.lbl, addr_acc)], new_acc
+            | _ -> raise (Redefined_sym e.lbl)
+          end
     | 1, Data d ->
         let new_acc = Int64.add addr_acc (List.fold_left data_size 0L d) in
         let addr = find_label st e.lbl 0 in
-          if addr = (-1L)
-          then ((List.append st [ ((e.lbl), addr_acc) ]), new_acc)
-          else raise (Redefined_sym e.lbl)
+          begin match addr with
+            | -1L -> List.append st [(e.lbl, addr_acc)], new_acc
+            | _ -> raise (Redefined_sym e.lbl)
+          end
     | _, _ -> (st, addr_acc)
 
 
-(* Replace labels in operands of instruction with their address *)
-let replace_operands (st : sym_tab list) (byte_list : sbyte list)
-  ((opcode, operlst) : ins) : sbyte list =
-  (* Helper function to replace labels in operands *)
-  let rec replace_aux (operlst : operand list) : operand list =
-    match operlst with
-      | Imm (Lbl l) :: tail -> [Imm (Lit (find_label st l 1))] @ (replace_aux tail)
-      | Ind1 (Lbl l) :: tail -> [Ind1 (Lit (find_label st l 1))] @ (replace_aux tail)
-      | Ind3 ((Lbl l), r) :: tail -> [Ind3 ((Lit (find_label st l 1)), r)] @ (replace_aux tail)
-      | [] -> []
-      | r :: tail -> [r] @ (replace_aux tail)
-  in
-    List.append byte_list @@ sbytes_of_ins (opcode, (replace_aux operlst))
-
-
-(* Replace labels in data with their address *)
-let replace_data (st : sym_tab list) (byte_list : sbyte list) (d : data) : sbyte list =
-  match d with
-  | Quad (Lit i) -> List.append byte_list (sbytes_of_data d)
-  | Asciz s -> List.append byte_list (sbytes_of_data d)
-  | Quad (Lbl l) -> List.append byte_list @@ sbytes_of_data (Quad (Lit (find_label st l 1)))
-
-
-(* General replace function*)
-(* Folds left over all the insn in the insn list or the data in the data list
-	   replacing each instance of a label if possible *)
+(* Top level replace function to be called in assemble function
+   Replaces all labels in the text and data segment with their address *)
 let replace (opt : int) (st : sym_tab list) (byte_list : sbyte list) (e : elem) :
   sbyte list =
-  let replace_all = replace_operands st in
-  let replace_dat = replace_data st in
-    match opt, e.asm with
-    | 0, Text t -> List.append byte_list @@ List.fold_left replace_all [] t
-    | 1, Data d -> List.append byte_list @@ List.fold_left replace_dat [] d
+  (* Helper function to replace labels in operands of instruction with their address *)
+  let replace_operands (byte_list : sbyte list)
+    ((opcode, operlst) : ins) : sbyte list =
+    (* Helper-Helper function to replace labels in operands *)
+    let rec replace_aux (operlst : operand list) : operand list =
+      match operlst with
+        | Imm (Lbl l) :: tail -> [Imm (Lit (find_label st l 1))] @ (replace_aux tail)
+        | Ind1 (Lbl l) :: tail -> [Ind1 (Lit (find_label st l 1))] @ (replace_aux tail)
+        | Ind3 ((Lbl l), r) :: tail -> [Ind3 ((Lit (find_label st l 1)), r)] @ (replace_aux tail)
+        | [] -> []
+        | r :: tail -> [r] @ (replace_aux tail)
+    in
+      List.append byte_list @@ sbytes_of_ins (opcode, (replace_aux operlst))
+  in
+  (* Helper function to replace labels in data with their address *)
+  let replace_data (byte_list : sbyte list) (d : data) : sbyte list =
+    match d with
+    | Quad (Lit i) -> List.append byte_list (sbytes_of_data d)
+    | Asciz s -> List.append byte_list (sbytes_of_data d)
+    | Quad (Lbl l) -> List.append byte_list @@ sbytes_of_data @@ Quad (Lit (find_label st l 1))
+  in
+  (*  *)
+  match opt, e.asm with
+    | 0, Text t -> List.append byte_list @@ List.fold_left replace_operands [] t
+    | 1, Data d -> List.append byte_list @@ List.fold_left replace_data [] d
     | _, _ -> byte_list
 
 
-let assemble (p:prog) : exec = 
-  let text_func = get_size 0 in (* Get size of text and data segments *)
-    let text_size = List.fold_left text_func 0L p in
-    let translate_text = translate_labels 0 in
-    let translate_data = translate_labels 1 in
-    (* Create symbol table. Consider ins first as text seg appears first *)
-    let (addr, size) = List.fold_left translate_text ([], 0x400000L) p in
-    let (addr2, size2) = List.fold_left translate_data (addr, size) p in
-    let e = find_label addr "main" 1 in
-    let replace_text = replace 0 addr2 in
-    let replace_data = replace 1 addr2 in
-    (* sbytes list of patched data and ins *)
-    let text_seg = List.fold_left replace_text [] p in
-    let data_seg = List.fold_left replace_data [] p
-    in
-      {
-        entry = e;
-        text_pos = 0x400000L;
-        data_pos = Int64.add 0x400000L text_size;
-        text_seg = text_seg;
-        data_seg = data_seg;
-      }
-
-
+let assemble (p:prog) : exec =
+  (* Get size of text and data segments *)
+  let text_size = List.fold_left (get_size 0) 0L p in
+  (* Create symbol table by scanning over text and data segment
+     Since the text segment comes before the data segment in memory, start with text *)
+  let (addr, size) = List.fold_left (translate_labels 0) ([], 0x400000L) p in
+  let (addr2, size2) = List.fold_left (translate_labels 1) (addr, size) p in
+  (* sbytes list of patched data and ins *)
+  let text_segment = List.fold_left (replace 0 addr2) [] p in
+  let data_segment = List.fold_left (replace 1 addr2) [] p
+  in
+    {
+      entry = find_label addr "main" 1;
+      text_pos = 0x400000L;
+      data_pos = Int64.add 0x400000L text_size;
+      text_seg = text_segment;
+      data_seg = data_segment;
+    }
 
 
 (* Helper function to initialise an empty machine state *)
@@ -539,4 +531,17 @@ let assemble (p:prog) : exec =
   may be of use.
 *)
 let load {entry; text_pos; data_pos; text_seg; data_seg} : mach = 
-failwith "load unimplemented"
+  let tmp_mem = Array.make 0xFFF8 InsFrag in
+  let t_n_d_segs = Array.append (Array.of_list text_seg) (Array.of_list data_seg)
+  in
+    (Array.blit t_n_d_segs 0 tmp_mem 0 (Array.length t_n_d_segs);
+    let exit_addr_array = Array.of_list (sbytes_of_int64 exit_addr) in
+    let memory = Array.append tmp_mem exit_addr_array in
+    (* Set all flags to false at initialisation *)
+    let flgs = { fo = false; fs = false; fz = false; } in
+    (* Create 17 registers, fill Rip and Rsp *)
+    let registers = Array.make 17 0L
+    in
+      (Array.set registers (rind Rip) entry;
+        Array.set registers (rind Rsp) 0x40FFF8L;
+        { flags = flgs; regs = registers; mem = memory; }))
