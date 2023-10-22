@@ -143,12 +143,25 @@ let sbytes_of_data : data -> sbyte list = function
 let debug_simulator = ref false
 
 (* Interpret a condition code with respect to the given flags. *)
-let interp_cnd {fo; fs; fz} : cnd -> bool = fun x -> failwith "interp_cnd unimplemented"
+(* eq -> fz=1, neq -> fz!=1, lt -> (fs=1 and fo=0) or (fs=0 and fo=1), le -> lt or eq, gt -> not le
+   ge -> not lt*)
+let interp_cnd {fo; fs; fz} : cnd -> bool =
+  let rec interp_aux code = 
+    begin match code with
+      | Eq -> fz
+      | Neq -> not fz
+      | Gt -> not (interp_aux Le)
+      | Ge -> not (interp_aux Lt)
+      | Lt -> fs <> fo
+      | Le -> (interp_aux Lt) || (interp_aux Eq)
+    end
+  in interp_aux
 
 (* Maps an X86lite address into Some OCaml array index,
    or None if the address is not within the legal address space. *)
 let map_addr (addr:quad) : int option =
-failwith "map_addr not implemented"
+  if (addr < mem_bot) || (addr > mem_top) then None
+  else Some ((Int64.to_int addr) - (Int64.to_int mem_bot))
 
 (* Simulates one step of the machine:
     - fetch the instruction at %rip
@@ -157,8 +170,144 @@ failwith "map_addr not implemented"
     - update the registers and/or memory appropriately
     - set the condition flags
 *)
+
+let step_ins_decode (i:sbyte) : (X86.ins) =
+  begin match i with
+    | InsB0 (ins, operands) -> (ins, operands)
+    | _ -> failwith "instruction decode wrong"
+  end
+
+
 let step (m:mach) : unit =
-failwith "step unimplemented"
+  let rip = Int64.to_int (m.regs.(rind Rip)) in (* rip is index (for mem array) to indicate where the next instr is *)
+  (* get opcode and operands of instruction *)
+  let (op, operands) = step_ins_decode m.mem.(rip) in
+  (* helper function to read register contents *)
+  let get_reg_val (r:reg) : int64 = m.regs.(rind r) in
+  (* helper function to set register contents *)
+  let set_reg_val (r:reg) (value:int64) : unit = m.regs.(rind r) <- value in
+  (* helper function to check sign bit of an int64 *)
+  let sign_bit n = Int64.(n < 0L) in
+
+  (* helper function to read from memory *)
+  let read_memory address size =
+    (* bounds checking and raise X86lite_segfault if needed *)
+    match map_addr address with
+    | Some index ->
+      (* read 'size' bytes from memory starting at the given index *)
+      let bytes = Array.sub m.mem index size in
+      int64_of_sbytes (Array.to_list bytes)
+    | None -> raise X86lite_segfault
+  in
+
+  (* helper function to write to memory *)
+  let write_memory address value size =
+    (* bounds checking and raise X86lite_segfault if needed *)
+    match map_addr address with
+    | Some index ->
+      (* Serialize the value into 'size' bytes and write to memory starting at the index *)
+      let bytes = sbytes_of_int64 value in
+      Array.blit (Array.of_list bytes) 0 m.mem index size
+    | None -> raise X86lite_segfault
+  in
+
+  let get_operand_val = function
+    | Imm (Lit i) -> i
+    | Imm (Lbl _) -> failwith "Labels not supported as immediate operands during execution"
+    | Reg r -> get_reg_val r
+    | Ind1 (Lit i) -> read_memory i 8
+    | Ind1 (Lbl _) -> failwith "Labels not supported in indirect addressing during execution"
+    | Ind2 r -> read_memory (get_reg_val r) 8
+    | Ind3 (Lit i, r) -> read_memory (Int64.add i (get_reg_val r)) 8
+    | Ind3 (Lbl _, _) -> failwith "Labels not supported in indirect addressing during execution"
+  in
+
+  let set_operand_val oper value = match oper with
+    | Reg r -> set_reg_val r value
+    | Ind1 (Lit i) -> write_memory i value 8
+    | Ind1 (Lbl _) -> failwith "Labels not supported in indirect addressing during execution"
+    | Ind2 r -> write_memory (get_reg_val r) value 8
+    | Ind3 (Lit i, r) -> write_memory (Int64.add i (get_reg_val r)) value 8
+    | Ind3 (Lbl _, _) -> failwith "Labels not supported in indirect addressing during execution"
+    | Imm _ -> failwith "Cannot write to immediate operand"
+  in
+ 
+  let update_flags v1 v2 res = 
+    m.flags.fo <- (sign_bit v1 = sign_bit v2) && (sign_bit v1 <> sign_bit res);
+    m.flags.fs <- sign_bit res;
+    m.flags.fz <- res = 0L;
+  in
+
+  let binop f = match operands with
+    | [src; dst] -> 
+      let v1 = get_operand_val src in
+      let v2 = get_operand_val dst in
+      let res = f v2 v1 in
+      update_flags v1 v2 res;
+      set_operand_val dst res
+    | _ -> failwith "Invalid operands for binary operation"
+  in
+  
+  let unop f = match operands with
+    | [src] ->
+      let v = get_operand_val src in
+      let res = f v in
+      (* update flags manually *)
+      set_operand_val src res
+    | _ -> failwith "Invalid operands for unary operation"
+
+  (match op with
+  | Movq -> 
+    begin
+      match operands with
+      | [src; dst] -> 
+        let value = get_operand_val src in
+        set_operand_val dst value
+      | _ -> failwith "Invalid operands for Movq"
+    end
+  | Pushq ->
+    begin match operands with
+      | [src] ->
+        let value = get_operand_val src in
+        let rsp = get_reg_val Rsp in
+        let new_rsp = Int64.sub rsp 8L in
+        set_reg_val Rsp (new_rsp);
+        write_memory (new_rsp) src 8
+      | _ -> failwith "Invalid operands for Pushq"
+    end
+  | Popq ->
+    begin match operands with
+      | [dst] ->
+        let value = get_operand_val dst in
+        let rsp = get_reg_val Rsp in
+        let new_rsp = Int64.add rsp 8L in
+        let mem_val = read_memory new_rsp 8 in
+        set_reg_val Rsp (new_rsp);
+        set_reg_val dst mem_val
+      | _ -> failwith "Invalid operands for Popq"
+    end
+  | Leaq -> 
+    begin match operands with
+      | [Ind1 (Lit i); dst] -> set_reg_val dst i
+      | [Ind1 (Lbl _); _] -> failwith "Labels not supported in indirect addressing during execution"
+      | [Ind2 r; dst] -> set_reg_val dst (get_reg_val r)
+      | [Ind3 (Lit i, r); dst] -> set_reg_val dst (Int64.add i (get_reg_val r))
+      | [Ind3 (Lbl _, _); _] -> failwith "Labels not supported in indirect addressing during execution"
+    end
+  | Incq -> unop Int64.succ
+  | Decq -> unop Int64.pred
+  | Negq -> unop Int64.neg
+  | Notq -> unop Int64.lognot
+  | Addq -> binop Int64.add
+  | Subq -> binop Int64.sub
+  | Andq -> binop Int64.logand
+  | Orq  -> binop Int64.logor
+  | Xorq -> binop Int64.logxor
+  | Imulq -> binop Int64.mul
+  | _ -> failwith "end of match block");
+  
+  set_reg_val Rip (Int64.add (get_reg_val Rip) 8L)
+
 
 (* Runs the machine until the rip register reaches a designated
    memory address. Returns the contents of %rax when the 
