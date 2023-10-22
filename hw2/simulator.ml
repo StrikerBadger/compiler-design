@@ -237,14 +237,14 @@ let set_cndtn_flags (op:opcode) (a:quad) (b:quad) (res:quad) (m:mach) : unit =
               m.flags.fz <- Int64.equal res 0L;
               m.flags.fo <- false
     | Sarq -> m.flags.fs <- if a == 0L then m.flags.fs else res < 0L;
-              m.flags.fz <- if a == 0L then m.flags.fs else Int64.equal res 0L;
+              m.flags.fz <- if a == 0L then m.flags.fz else Int64.equal res 0L;
               m.flags.fo <- if a == 1L then false else m.flags.fo
     | Shlq -> m.flags.fs <- if a == 0L then m.flags.fs else res < 0L;
-              m.flags.fz <- if a == 0L then m.flags.fs else Int64.equal res 0L;
+              m.flags.fz <- if a == 0L then m.flags.fz else Int64.equal res 0L;
               let shifted_dest = Int64.shift_right_logical b 62 in
                 m.flags.fo <- if a == 1L then (Int64.equal shifted_dest 2L) || (Int64.equal shifted_dest 1L) else m.flags.fo
     | Shrq -> m.flags.fs <- if a == 0L then m.flags.fs else false;
-              m.flags.fz <- if a == 0L then m.flags.fs else Int64.equal res 0L;
+              m.flags.fz <- if a == 0L then m.flags.fz else Int64.equal res 0L;
               m.flags.fo <- if a == 1L then b < 0L else m.flags.fo
     | _ -> failwith "Tried to set condition flags for non-supported operation"
     
