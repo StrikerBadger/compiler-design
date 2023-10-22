@@ -143,25 +143,111 @@ let sbytes_of_data : data -> sbyte list = function
 let debug_simulator = ref false
 
 (* Interpret a condition code with respect to the given flags. *)
-(* eq -> fz=1, neq -> fz!=1, lt -> (fs=1 and fo=0) or (fs=0 and fo=1), le -> lt or eq, gt -> not le
-   ge -> not lt*)
-let interp_cnd {fo; fs; fz} : cnd -> bool =
-  let rec interp_aux code = 
-    begin match code with
-      | Eq -> fz
-      | Neq -> not fz
-      | Gt -> not (interp_aux Le)
-      | Ge -> not (interp_aux Lt)
-      | Lt -> fs <> fo
-      | Le -> (interp_aux Lt) || (interp_aux Eq)
-    end
-  in interp_aux
+let interp_cnd {fo; fs; fz} : cnd -> bool = fun (code:cnd) ->
+  match code with
+    | Eq -> fz
+    | Neq -> not fz
+    | Lt -> fs <> fo
+    | Le -> (fs <> fo) || fz
+    | Gt -> (fs == fo) && not fz
+    | Ge -> fs == fo
 
 (* Maps an X86lite address into Some OCaml array index,
    or None if the address is not within the legal address space. *)
-let map_addr (addr:quad) : int option =
-  if (addr < mem_bot) || (addr > mem_top) then None
-  else Some ((Int64.to_int addr) - (Int64.to_int mem_bot))
+let map_addr (addr:quad) : int option = if addr >= mem_top || addr < mem_bot then None else
+  Some (Int64.to_int (Int64.sub addr mem_bot))
+
+let rec save_sbytes_to_mem_helper (i:int) (loc:quad) (data:sbyte list) (s:mach) : unit =
+  match data with
+    | [] -> ()
+    | b::bs -> let mem_index = map_addr (Int64.add loc (Int64.of_int i)) in
+                                match mem_index with
+                                  | None -> raise X86lite_segfault
+                                  | Some mem_index -> s.mem.(mem_index) <- b;
+                                save_sbytes_to_mem_helper (i+1) loc bs s
+
+let save_sbytes_to_mem (loc:quad) (data:sbyte list) (s:mach) : unit =
+  save_sbytes_to_mem_helper 0 loc data s
+
+let save_quad_to_mem (loc:quad) (data:quad) (s:mach) : unit = 
+  save_sbytes_to_mem loc (sbytes_of_int64 data) s
+
+(* IN: Operand
+   OUT: unit
+   DESCRIPTION: Put a quad into an operand/location*)
+let put_quad (op:operand) (qd:quad) (s:mach) : unit = 
+  match op with
+    | Reg r -> s.regs.(rind r) <- qd
+    | Ind1 (Lit q) -> save_quad_to_mem q qd s
+    | Ind2 r -> save_quad_to_mem (s.regs.(rind r)) qd s
+    | Ind3 ((Lit q), r) -> save_quad_to_mem (Int64.add q (s.regs.(rind r))) qd s
+    | _ -> failwith "Unimplemented operand pattern in put_quad"
+
+let take_sbytes_from_mem (loc:quad) (n:int) (s:mach) : sbyte list =
+  let rec take_sbytes_from_mem_helper (i:int) (loc:quad) (n:int) (s:mach) : sbyte list =
+    match n with
+      | 0 -> []
+      | _ -> let mem_index = map_addr (Int64.add loc (Int64.of_int i)) in
+              match mem_index with
+                | None -> raise X86lite_segfault
+                | Some mem_index -> s.mem.(mem_index)::(take_sbytes_from_mem_helper (i+1) loc (n-1) s)
+  in take_sbytes_from_mem_helper 0 loc n s
+
+let take_quad_from_mem (loc:quad) (s:mach) : quad =
+  int64_of_sbytes (take_sbytes_from_mem loc 8 s)
+
+(* IN: Operand
+   OUT: quad
+   DESCRIPTION: Take a quad from an operand/location*)
+let take_quad (op:operand) (s:mach) : quad =
+  match op with
+    | Imm (Lit q) -> q
+    | Reg r -> s.regs.(rind r)
+    | Ind1 (Lit q) -> take_quad_from_mem q s
+    | Ind2 r -> take_quad_from_mem (s.regs.(rind r)) s
+    | Ind3 ((Lit q), r) -> take_quad_from_mem (Int64.add q (s.regs.(rind r))) s
+    | _ -> failwith "Unimplemented operand pattern in take_quad"
+
+let sign_of_int64 (i:int64) : int64 = if i < 0L then 1L else 0L
+
+(* IN: Operand, Quad, Quad, Quad, mach,
+   OUT: unit
+   DESCRIPTION: Set the condition flags according to the operation*)
+let set_cndtn_flags (op:opcode) (a:quad) (b:quad) (res:quad) (m:mach) : unit =
+  match op with
+    | Negq -> m.flags.fs <- res < 0L;
+              m.flags.fz <- Int64.equal res 0L;
+              m.flags.fo <- Int64.equal res Int64.min_int
+    | Addq -> m.flags.fs <- res < 0L;
+              m.flags.fz <- Int64.equal res 0L;
+              m.flags.fo <- (sign_of_int64 a == sign_of_int64 b) && (sign_of_int64 res <> sign_of_int64 a)
+    | Subq -> m.flags.fs <- res < 0L;
+              m.flags.fz <- Int64.equal res 0L;
+              m.flags.fo <- ((sign_of_int64 (Int64.mul Int64.minus_one a) == sign_of_int64 b) && (sign_of_int64 res <> sign_of_int64 (Int64.mul a Int64.minus_one))) || (Int64.equal a Int64.min_int)
+    | Imulq -> m.flags.fs <- false;
+               m.flags.fz <- false;
+               m.flags.fo <- ((a <> 0L) && (Int64.div res a <> b)) || ((b <> 0L) && (Int64.div res b <> a))
+    | Andq -> m.flags.fs <- res < 0L;
+              m.flags.fz <- Int64.equal res 0L;
+              m.flags.fo <- false
+    | Orq ->  m.flags.fs <- res < 0L;
+              m.flags.fz <- Int64.equal res 0L;
+              m.flags.fo <- false
+    | Xorq -> m.flags.fs <- res < 0L;
+              m.flags.fz <- Int64.equal res 0L;
+              m.flags.fo <- false
+    | Sarq -> m.flags.fs <- if a == 0L then m.flags.fs else res < 0L;
+              m.flags.fz <- if a == 0L then m.flags.fs else Int64.equal res 0L;
+              m.flags.fo <- if a == 1L then false else m.flags.fo
+    | Shlq -> m.flags.fs <- if a == 0L then m.flags.fs else res < 0L;
+              m.flags.fz <- if a == 0L then m.flags.fs else Int64.equal res 0L;
+              let shifted_dest = Int64.shift_right_logical b 62 in
+                m.flags.fo <- if a == 1L then (Int64.equal shifted_dest 3L) || (Int64.equal shifted_dest 1L) else m.flags.fo
+    | Shrq -> m.flags.fs <- if a == 0L then m.flags.fs else false;
+              m.flags.fz <- if a == 0L then m.flags.fs else Int64.equal res 0L;
+              m.flags.fo <- if a == 1L then b < 0L else m.flags.fo
+    | _ -> failwith "Tried to set condition flags for non-supported operation"
+    
 
 (* Simulates one step of the machine:
     - fetch the instruction at %rip
@@ -170,144 +256,113 @@ let map_addr (addr:quad) : int option =
     - update the registers and/or memory appropriately
     - set the condition flags
 *)
-
-let step_ins_decode (i:sbyte) : (X86.ins) =
-  begin match i with
-    | InsB0 (ins, operands) -> (ins, operands)
-    | _ -> failwith "instruction decode wrong"
-  end
-
-
-let step (m:mach) : unit =
-  let rip = Int64.to_int (m.regs.(rind Rip)) in (* rip is index (for mem array) to indicate where the next instr is *)
-  (* get opcode and operands of instruction *)
-  let (op, operands) = step_ins_decode m.mem.(rip) in
-  (* helper function to read register contents *)
-  let get_reg_val (r:reg) : int64 = m.regs.(rind r) in
-  (* helper function to set register contents *)
-  let set_reg_val (r:reg) (value:int64) : unit = m.regs.(rind r) <- value in
-  (* helper function to check sign bit of an int64 *)
-  let sign_bit n = Int64.(n < 0L) in
-
-  (* helper function to read from memory *)
-  let read_memory address size =
-    (* bounds checking and raise X86lite_segfault if needed *)
-    match map_addr address with
-    | Some index ->
-      (* read 'size' bytes from memory starting at the given index *)
-      let bytes = Array.sub m.mem index size in
-      int64_of_sbytes (Array.to_list bytes)
-    | None -> raise X86lite_segfault
-  in
-
-  (* helper function to write to memory *)
-  let write_memory address value size =
-    (* bounds checking and raise X86lite_segfault if needed *)
-    match map_addr address with
-    | Some index ->
-      (* Serialize the value into 'size' bytes and write to memory starting at the index *)
-      let bytes = sbytes_of_int64 value in
-      Array.blit (Array.of_list bytes) 0 m.mem index size
-    | None -> raise X86lite_segfault
-  in
-
-  let get_operand_val = function
-    | Imm (Lit i) -> i
-    | Imm (Lbl _) -> failwith "Labels not supported as immediate operands during execution"
-    | Reg r -> get_reg_val r
-    | Ind1 (Lit i) -> read_memory i 8
-    | Ind1 (Lbl _) -> failwith "Labels not supported in indirect addressing during execution"
-    | Ind2 r -> read_memory (get_reg_val r) 8
-    | Ind3 (Lit i, r) -> read_memory (Int64.add i (get_reg_val r)) 8
-    | Ind3 (Lbl _, _) -> failwith "Labels not supported in indirect addressing during execution"
-  in
-
-  let set_operand_val oper value = match oper with
-    | Reg r -> set_reg_val r value
-    | Ind1 (Lit i) -> write_memory i value 8
-    | Ind1 (Lbl _) -> failwith "Labels not supported in indirect addressing during execution"
-    | Ind2 r -> write_memory (get_reg_val r) value 8
-    | Ind3 (Lit i, r) -> write_memory (Int64.add i (get_reg_val r)) value 8
-    | Ind3 (Lbl _, _) -> failwith "Labels not supported in indirect addressing during execution"
-    | Imm _ -> failwith "Cannot write to immediate operand"
-  in
- 
-  let update_flags v1 v2 res = 
-    m.flags.fo <- (sign_bit v1 = sign_bit v2) && (sign_bit v1 <> sign_bit res);
-    m.flags.fs <- sign_bit res;
-    m.flags.fz <- res = 0L;
-  in
-
-  let binop f = match operands with
-    | [src; dst] -> 
-      let v1 = get_operand_val src in
-      let v2 = get_operand_val dst in
-      let res = f v2 v1 in
-      update_flags v1 v2 res;
-      set_operand_val dst res
-    | _ -> failwith "Invalid operands for binary operation"
-  in
-  
-  let unop f = match operands with
-    | [src] ->
-      let v = get_operand_val src in
-      let res = f v in
-      (* update flags manually *)
-      set_operand_val src res
-    | _ -> failwith "Invalid operands for unary operation"
-
-  (match op with
-  | Movq -> 
-    begin
-      match operands with
-      | [src; dst] -> 
-        let value = get_operand_val src in
-        set_operand_val dst value
-      | _ -> failwith "Invalid operands for Movq"
-    end
-  | Pushq ->
-    begin match operands with
-      | [src] ->
-        let value = get_operand_val src in
-        let rsp = get_reg_val Rsp in
-        let new_rsp = Int64.sub rsp 8L in
-        set_reg_val Rsp (new_rsp);
-        write_memory (new_rsp) src 8
-      | _ -> failwith "Invalid operands for Pushq"
-    end
-  | Popq ->
-    begin match operands with
-      | [dst] ->
-        let value = get_operand_val dst in
-        let rsp = get_reg_val Rsp in
-        let new_rsp = Int64.add rsp 8L in
-        let mem_val = read_memory new_rsp 8 in
-        set_reg_val Rsp (new_rsp);
-        set_reg_val dst mem_val
-      | _ -> failwith "Invalid operands for Popq"
-    end
-  | Leaq -> 
-    begin match operands with
-      | [Ind1 (Lit i); dst] -> set_reg_val dst i
-      | [Ind1 (Lbl _); _] -> failwith "Labels not supported in indirect addressing during execution"
-      | [Ind2 r; dst] -> set_reg_val dst (get_reg_val r)
-      | [Ind3 (Lit i, r); dst] -> set_reg_val dst (Int64.add i (get_reg_val r))
-      | [Ind3 (Lbl _, _); _] -> failwith "Labels not supported in indirect addressing during execution"
-    end
-  | Incq -> unop Int64.succ
-  | Decq -> unop Int64.pred
-  | Negq -> unop Int64.neg
-  | Notq -> unop Int64.lognot
-  | Addq -> binop Int64.add
-  | Subq -> binop Int64.sub
-  | Andq -> binop Int64.logand
-  | Orq  -> binop Int64.logor
-  | Xorq -> binop Int64.logxor
-  | Imulq -> binop Int64.mul
-  | _ -> failwith "end of match block");
-  
-  set_reg_val Rip (Int64.add (get_reg_val Rip) 8L)
-
+let step (m:mach) : unit = if m.regs.(rind Rip) == exit_addr then () else
+  let instruction = 
+    match (List.hd (take_sbytes_from_mem m.regs.(rind Rip) 8 m)) with
+      | InsB0 inst -> inst
+      | Byte _ -> failwith "Byte"
+      | InsFrag -> failwith "Instruction Fragment"
+    in 
+      (* Increment Rip *)
+      m.regs.(rind Rip) <- Int64.add m.regs.(rind Rip) 8L;
+      (* Execute instruction *)
+      let operation = fst instruction in
+        let operands = snd instruction in
+          match operation with
+            (*Data-movement instructions*)
+            | Leaq -> let ind = List.hd operands in
+                        let dst = List.hd (List.tl operands) in
+                          put_quad dst (take_quad ind m) m
+            | Movq -> let src = List.hd operands in
+                        let dst = List.hd (List.tl operands) in
+                          put_quad dst (take_quad src m) m
+            | Pushq -> let src = List.hd operands in
+                          m.regs.(rind Rsp) <- Int64.sub m.regs.(rind Rsp) 8L;
+                          put_quad (Ind2 Rsp) (take_quad src m) m 
+            | Popq -> let dst = List.hd operands in
+                        put_quad dst (take_quad (Ind2 Rsp) m) m;
+                        m.regs.(rind Rsp) <- Int64.add m.regs.(rind Rsp) 8L
+            (*Control-flow instructions*)
+            | Cmpq -> let src1 = List.hd operands in
+                        let src2 = List.hd (List.tl operands) in
+                          set_cndtn_flags Subq (take_quad src1 m) (take_quad src2 m) (Int64.sub (take_quad src2 m) (take_quad src1 m)) m
+            | Jmp -> let src = List.hd operands in
+                        m.regs.(rind Rip) <- take_quad src m
+            | Callq -> let src = List.hd operands in
+                        m.regs.(rind Rsp) <- Int64.sub m.regs.(rind Rsp) 8L;
+                        put_quad (Ind2 Rsp) m.regs.(rind Rip) m;
+                        m.regs.(rind Rip) <- take_quad src m
+            | Retq -> m.regs.(rind Rip) <- take_quad (Ind2 Rsp) m;
+                      m.regs.(rind Rsp) <- Int64.add m.regs.(rind Rsp) 8L
+            | J cc -> let src = List.hd operands in
+                        if interp_cnd m.flags cc then m.regs.(rind Rip) <- take_quad src m else ()
+            (*Arithmetic instructions*)
+            | Negq -> let dst = List.hd operands in
+                        let res = Int64.mul (take_quad dst m) Int64.minus_one in
+                          set_cndtn_flags Negq 0L 0L res m;
+                          put_quad dst res m
+            | Addq -> let src = (List.hd operands) in
+                        let dst = (List.hd (List.tl operands)) in
+                          let res = Int64.add (take_quad dst m) (take_quad src m) in
+                            set_cndtn_flags Addq (take_quad src m) (take_quad dst m) res m;
+                            put_quad dst res m
+            | Subq -> let src = (List.hd operands) in
+                        let dst = (List.hd (List.tl operands)) in
+                          let res = Int64.sub (take_quad dst m) (take_quad src m) in
+                            set_cndtn_flags Subq (take_quad src m) (take_quad dst m) res m;
+                            put_quad dst res m
+            | Imulq -> let src = (List.hd operands) in
+                        let reg = (List.hd (List.tl operands)) in
+                          let res = Int64.mul (take_quad reg m) (take_quad src m) in
+                            set_cndtn_flags Imulq (take_quad src m) (take_quad reg m) res m;
+                            put_quad reg res m
+            | Incq -> let src = (List.hd operands) in
+                        let res = Int64.add 1L (take_quad src m) in
+                          set_cndtn_flags Addq (take_quad src m) 1L res m;
+                          put_quad src res m
+            | Decq -> let src = (List.hd operands) in
+                        let res = Int64.sub (take_quad src m) 1L in
+                          set_cndtn_flags Subq (take_quad src m) 1L res m;
+                          put_quad src res m
+            (*Logic Instructions*)
+            | Notq -> let dst = (List.hd operands) in
+                        let res = Int64.lognot (take_quad dst m) in
+                          put_quad dst res m
+            | Andq -> let src = (List.hd operands) in
+                        let dst = (List.hd (List.tl operands)) in
+                          let res = Int64.logand (take_quad dst m) (take_quad src m) in
+                            set_cndtn_flags Andq (take_quad src m) (take_quad dst m) res m;
+                            put_quad dst res m
+            | Orq -> let src = (List.hd operands) in
+                        let dst = (List.hd (List.tl operands)) in
+                          let res = Int64.logor (take_quad dst m) (take_quad src m) in
+                            set_cndtn_flags Orq (take_quad src m) (take_quad dst m) res m;
+                            put_quad dst res m
+            | Xorq -> let src = (List.hd operands) in
+                        let dst = (List.hd (List.tl operands)) in
+                          let res = Int64.logxor (take_quad dst m) (take_quad src m) in
+                            set_cndtn_flags Xorq (take_quad src m) (take_quad dst m) res m;
+                            put_quad dst res m
+            (*Bit-manipulation Instructions*)
+            | Sarq -> let amt = (List.hd operands) in
+                        let dst = (List.hd (List.tl operands)) in
+                          let res = Int64.shift_right (take_quad dst m) (Int64.to_int (take_quad amt m)) in
+                            set_cndtn_flags Sarq (take_quad amt m) (take_quad dst m) res m;
+                            put_quad dst res m
+            | Shlq -> let amt = (List.hd operands) in
+                        let dst = (List.hd (List.tl operands)) in
+                          let res = Int64.shift_left (take_quad dst m) (Int64.to_int (take_quad amt m)) in
+                            set_cndtn_flags Shlq (take_quad amt m) (take_quad dst m) res m;
+                            put_quad dst res m
+            | Shrq -> let amt = (List.hd operands) in
+                        let dst = (List.hd (List.tl operands)) in
+                          let res = Int64.shift_right_logical (take_quad dst m) (Int64.to_int (take_quad amt m)) in
+                            set_cndtn_flags Shrq (take_quad amt m) (take_quad dst m) res m;
+                            put_quad dst res m
+            | Set cc -> let dst = (List.hd operands) in
+                          let lower_byte_mask = Int64.shift_left Int64.minus_one 8 in
+                            let res = Int64.logand (take_quad dst m) lower_byte_mask in
+                              if interp_cnd m.flags cc then put_quad dst (Int64.add res 1L) m else put_quad dst res m
 
 (* Runs the machine until the rip register reaches a designated
    memory address. Returns the contents of %rax when the 
@@ -346,10 +401,131 @@ exception Redefined_sym of lbl
 
   HINT: List.fold_left and List.fold_right are your friends.
  *)
-let assemble (p:prog) : exec =
-failwith "assemble unimplemented"
 
-(* Convert an object file into an executable machine state. 
+(* Helper function to determine the size of a labeled block of
+   either text or data (selected using opt int) *)
+let get_size (opt : int) (size : int64) (e : elem) : int64 =
+  (* Data size is computed differently for different data types *)
+  let data_size (d_size : int64) (d : data) : int64 =
+    match d with
+      | Asciz a -> Int64.add d_size @@ Int64.succ @@ (Int64.of_int (String.length a))
+      | Quad (Lit i) -> Int64.add d_size 8L
+      | _ -> size
+    in
+    (* text size is just 4 times the length of the ins list *)
+    match opt, e.asm with
+    | 0, Text t -> Int64.add size @@ Int64.of_int ((List.length t) * 8)
+    | 1, Data d -> Int64.add size @@ List.fold_left data_size 0L d
+    | _, _ -> size
+
+
+(* Symbol table to keep track of all labels and their respective addresses *)
+type sym_tab = lbl * quad
+
+
+(* Find label to address mapping in symbol table, return address or
+   if not present, then -1L or raise exception depending on opt *)
+let rec find_label (st : sym_tab list) (l : lbl) (opt : int) : int64 =
+  match st with
+  | (a, b) :: tail -> if a = l then b else find_label tail l opt
+  | [] -> if opt = 0 then (-1L) else raise (Undefined_sym l)
+
+
+(* Translate the labels into the addresses that they will be found in *)
+let translate_labels (opt : int) (st, addr_acc) (e : elem) : ((sym_tab list) * int64) =
+  let data_size (d_size : int64) (d : data) : int64 =
+    match d with
+    | Asciz a -> Int64.add d_size @@ Int64.succ @@ Int64.of_int (String.length a)
+    | Quad (Lit i) -> Int64.add d_size 8L
+    | _ -> addr_acc
+  in
+    match opt, e.asm with
+    | 0, Text t ->
+        let new_acc = Int64.add addr_acc (Int64.of_int ((List.length t) * 8)) in
+        let addr = find_label st e.lbl 0 in
+          if addr = (-1L)
+          then ((List.append st [ ((e.lbl), addr_acc) ]), new_acc)
+          else raise (Redefined_sym e.lbl)
+    | 1, Data d ->
+        let new_acc = Int64.add addr_acc (List.fold_left data_size 0L d) in
+        let addr = find_label st e.lbl 0 in
+          if addr = (-1L)
+          then ((List.append st [ ((e.lbl), addr_acc) ]), new_acc)
+          else raise (Redefined_sym e.lbl)
+    | _, _ -> (st, addr_acc)
+
+
+(* Replace labels in operands of instruction with their address *)
+let replace_operands (st : sym_tab list) (byte_list : sbyte list)
+  ((opcode, operlst) : ins) : sbyte list =
+  (* Helper function to replace labels in operands *)
+  let rec replace_aux (operlst : operand list) : operand list =
+    match operlst with
+      | Imm (Lbl l) :: tail -> [Imm (Lit (find_label st l 1))] @ (replace_aux tail)
+      | Ind1 (Lbl l) :: tail -> [Ind1 (Lit (find_label st l 1))] @ (replace_aux tail)
+      | Ind3 ((Lbl l), r) :: tail -> [Ind3 ((Lit (find_label st l 1)), r)] @ (replace_aux tail)
+      | [] -> []
+      | r :: tail -> [r] @ (replace_aux tail)
+  in
+    List.append byte_list @@ sbytes_of_ins (opcode, (replace_aux operlst))
+
+
+(* Replace labels in data with their address *)
+let replace_data (st : sym_tab list) (byte_list : sbyte list) (d : data) : sbyte list =
+  match d with
+  | Quad (Lit i) -> List.append byte_list (sbytes_of_data d)
+  | Asciz s -> List.append byte_list (sbytes_of_data d)
+  | Quad (Lbl l) -> List.append byte_list @@ sbytes_of_data (Quad (Lit (find_label st l 1)))
+
+
+(* General replace function*)
+(* Folds left over all the insn in the insn list or the data in the data list
+	   replacing each instance of a label if possible *)
+let replace (opt : int) (st : sym_tab list) (byte_list : sbyte list) (e : elem) :
+  sbyte list =
+  let replace_all = replace_operands st in
+  let replace_dat = replace_data st in
+    match opt, e.asm with
+    | 0, Text t -> List.append byte_list @@ List.fold_left replace_all [] t
+    | 1, Data d -> List.append byte_list @@ List.fold_left replace_dat [] d
+    | _, _ -> byte_list
+
+
+let assemble (p:prog) : exec = 
+  let text_func = get_size 0 in (* Get size of text and data segments *)
+    let text_size = List.fold_left text_func 0L p in
+    let translate_text = translate_labels 0 in
+    let translate_data = translate_labels 1 in
+    (* Create symbol table. Consider ins first as text seg appears first *)
+    let (addr, size) = List.fold_left translate_text ([], 0x400000L) p in
+    let (addr2, size2) = List.fold_left translate_data (addr, size) p in
+    let e = find_label addr "main" 1 in
+    let replace_text = replace 0 addr2 in
+    let replace_data = replace 1 addr2 in
+    (* sbytes list of patched data and ins *)
+    let text_seg = List.fold_left replace_text [] p in
+    let data_seg = List.fold_left replace_data [] p
+    in
+      {
+        entry = e;
+        text_pos = 0x400000L;
+        data_pos = Int64.add 0x400000L text_size;
+        text_seg = text_seg;
+        data_seg = data_seg;
+      }
+
+
+
+
+(* Helper function to initialise an empty machine state *)
+(*let init_mach : mach =
+  let flags = {fo=false; fs=false; fz=false} in
+  let regs = Array.make nregs 0L in
+  let mem = Array.make mem_size 0L in
+  let m = {flags; regs; mem} in
+  m*)
+
+  (* Convert an object file into an executable machine state. 
     - allocate the mem array
     - set up the memory state by writing the symbolic bytes to the 
       appropriate locations 
