@@ -1460,4 +1460,4 @@ let tests = asgoel_tests
           @ tgarsys_tests
           @ wmcd_tests
 
-let other_team_tests = GradedTest("OtherTeamTests (Spring 2015) (manual)", 5, tests)
+let other_team_tests = Test("OtherTeamTests (Spring 2015) (manual)", tests)

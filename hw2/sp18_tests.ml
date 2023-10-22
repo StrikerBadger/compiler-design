@@ -929,3 +929,5 @@ let tests = aen_tests
           (* @ tlarkwor_tests *) (* No test provided *)
           @ wangandr_tests
           @ wsun_tests
+
+let other_team_tests = Test("OtherTeamTests (Spring 2018) (manual)", tests)
