@@ -213,41 +213,49 @@ let sign_of_int64 (i:int64) : int64 = if i < 0L then 1L else 0L
 (* IN: Operand, Quad, Quad, Quad, mach,
    OUT: unit
    DESCRIPTION: Set the condition flags according to the operation*)
-let set_cndtn_flags (op:opcode) (a:quad) (b:quad) (res:quad) (m:mach) : unit =
-  match op with
-    | Negq -> m.flags.fs <- res < 0L;
-              m.flags.fz <- Int64.equal res 0L;
-              m.flags.fo <- Int64.equal a Int64.min_int
-    | Addq -> m.flags.fs <- res < 0L;
-              m.flags.fz <- Int64.equal res 0L;
-              m.flags.fo <- (sign_of_int64 a = sign_of_int64 b) && (sign_of_int64 res <> sign_of_int64 a)
-    | Subq -> m.flags.fs <- res < 0L;
-              m.flags.fz <- Int64.equal res 0L;
-              m.flags.fo <- ((sign_of_int64 (Int64.mul Int64.minus_one a) = sign_of_int64 b) && (sign_of_int64 res <> sign_of_int64 (Int64.mul a Int64.minus_one))) || (Int64.equal a Int64.min_int)
-    | Imulq -> m.flags.fs <- false;
-               m.flags.fz <- false;
-               m.flags.fo <- ((a <> 0L) && (Int64.div res a <> b)) || ((b <> 0L) && (Int64.div res b <> a))
-    | Andq -> m.flags.fs <- res < 0L;
-              m.flags.fz <- Int64.equal res 0L;
-              m.flags.fo <- false
-    | Orq ->  m.flags.fs <- res < 0L;
-              m.flags.fz <- Int64.equal res 0L;
-              m.flags.fo <- false
-    | Xorq -> m.flags.fs <- res < 0L;
-              m.flags.fz <- Int64.equal res 0L;
-              m.flags.fo <- false
-    | Sarq -> m.flags.fs <- if a = 0L then m.flags.fs else res < 0L;
-              m.flags.fz <- if a = 0L then m.flags.fz else Int64.equal res 0L;
-              m.flags.fo <- if a = 1L then false else m.flags.fo
-    | Shlq -> m.flags.fs <- if a = 0L then m.flags.fs else res < 0L;
-              m.flags.fz <- if a = 0L then m.flags.fz else Int64.equal res 0L;
-              let shifted_dest = Int64.shift_right_logical b 62 in
-                m.flags.fo <- if a = 1L then (Int64.equal shifted_dest 2L) || (Int64.equal shifted_dest 1L) else m.flags.fo
-    | Shrq -> m.flags.fs <- if a = 0L then m.flags.fs else res < 0L;
-              m.flags.fz <- if a = 0L then m.flags.fz else Int64.equal res 0L;
-              m.flags.fo <- if a = 1L then b < 0L else m.flags.fo
-    | _ -> failwith "Tried to set condition flags for non-supported operation"
-    
+   let set_cndtn_flags (op:opcode) (a:quad) (b:quad) (res:quad) (m:mach) : unit =
+    match op with
+      | Negq -> m.flags.fs <- res < 0L;
+                m.flags.fz <- Int64.equal res 0L;
+                m.flags.fo <- Int64.equal a Int64.min_int
+      | Addq -> m.flags.fs <- res < 0L;
+                m.flags.fz <- Int64.equal res 0L;
+                m.flags.fo <- (sign_of_int64 a = sign_of_int64 b) && (sign_of_int64 res <> sign_of_int64 a)
+      | Subq -> m.flags.fs <- res < 0L;
+                m.flags.fz <- Int64.equal res 0L;
+                m.flags.fo <- ((sign_of_int64 (Int64.neg a) = sign_of_int64 b) && (sign_of_int64 res <> sign_of_int64 (Int64.neg a))) || (Int64.equal a Int64.min_int)
+      | Imulq -> m.flags.fo <- (Int64_overflow.mul a b).overflow
+      | Andq -> m.flags.fs <- res < 0L;
+                m.flags.fz <- Int64.equal res 0L;
+                m.flags.fo <- false
+      | Orq ->  m.flags.fs <- res < 0L;
+                m.flags.fz <- Int64.equal res 0L;
+                m.flags.fo <- false
+      | Xorq -> m.flags.fs <- res < 0L;
+                m.flags.fz <- Int64.equal res 0L;
+                m.flags.fo <- false
+      | Sarq -> if a = 0L then () else (
+                  m.flags.fs <- res < 0L;
+                  m.flags.fz <- Int64.equal res 0L;
+                  m.flags.fo <- if a = 1L then false else m.flags.fo
+                )
+      | Shlq -> if a = 0L then () else (
+                  m.flags.fs <- res < 0L;
+                  m.flags.fz <- Int64.equal res 0L;
+                  m.flags.fo <- if a = 1L then (
+                    let shifted_dest = Int64.shift_right_logical b 62 in
+                      shifted_dest = 1L || shifted_dest = 2L
+                  ) else m.flags.fo
+                )
+      | Shrq -> if a = 0L then () else (
+                  m.flags.fs <- res < 0L;
+                  m.flags.fz <- Int64.equal res 0L;
+                  m.flags.fo <- if a = 1L then (
+                    let shifted_dest = Int64.shift_right_logical b 63 in
+                      shifted_dest = 1L
+        ) else m.flags.fo
+      )
+      | _ -> failwith "Tried to set condition flags for non-supported operation"
 
 (* Simulates one step of the machine:
     - fetch the instruction at %rip
