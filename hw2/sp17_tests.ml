@@ -1422,4 +1422,4 @@ let tests = alexpe_tests
           @ rzajac_tests
           @ wuwc_tests
 
-let other_team_tests = GradedTest("OtherTeamTests (Spring 2017) (manual)", 10, tests)
+let other_team_tests = Test("OtherTeamTests (Spring 2017) (manual)", tests)
