@@ -149,8 +149,8 @@ let interp_cnd {fo; fs; fz} : cnd -> bool = fun (code:cnd) ->
     | Neq -> not fz
     | Lt -> fs <> fo
     | Le -> (fs <> fo) || fz
-    | Gt -> (fs == fo) && not fz
-    | Ge -> fs == fo
+    | Gt -> (fs = fo) && not fz
+    | Ge -> fs = fo
 
 (* Maps an X86lite address into Some OCaml array index,
    or None if the address is not within the legal address space. *)
@@ -217,13 +217,13 @@ let set_cndtn_flags (op:opcode) (a:quad) (b:quad) (res:quad) (m:mach) : unit =
   match op with
     | Negq -> m.flags.fs <- res < 0L;
               m.flags.fz <- Int64.equal res 0L;
-              m.flags.fo <- Int64.equal res Int64.min_int
+              m.flags.fo <- Int64.equal a Int64.min_int
     | Addq -> m.flags.fs <- res < 0L;
               m.flags.fz <- Int64.equal res 0L;
-              m.flags.fo <- (sign_of_int64 a == sign_of_int64 b) && (sign_of_int64 res <> sign_of_int64 a)
+              m.flags.fo <- (sign_of_int64 a = sign_of_int64 b) && (sign_of_int64 res <> sign_of_int64 a)
     | Subq -> m.flags.fs <- res < 0L;
               m.flags.fz <- Int64.equal res 0L;
-              m.flags.fo <- ((sign_of_int64 (Int64.mul Int64.minus_one a) == sign_of_int64 b) && (sign_of_int64 res <> sign_of_int64 (Int64.mul a Int64.minus_one))) || (Int64.equal a Int64.min_int)
+              m.flags.fo <- ((sign_of_int64 (Int64.mul Int64.minus_one a) = sign_of_int64 b) && (sign_of_int64 res <> sign_of_int64 (Int64.mul a Int64.minus_one))) || (Int64.equal a Int64.min_int)
     | Imulq -> m.flags.fs <- false;
                m.flags.fz <- false;
                m.flags.fo <- ((a <> 0L) && (Int64.div res a <> b)) || ((b <> 0L) && (Int64.div res b <> a))
@@ -236,16 +236,16 @@ let set_cndtn_flags (op:opcode) (a:quad) (b:quad) (res:quad) (m:mach) : unit =
     | Xorq -> m.flags.fs <- res < 0L;
               m.flags.fz <- Int64.equal res 0L;
               m.flags.fo <- false
-    | Sarq -> m.flags.fs <- if a == 0L then m.flags.fs else res < 0L;
-              m.flags.fz <- if a == 0L then m.flags.fz else Int64.equal res 0L;
-              m.flags.fo <- if a == 1L then false else m.flags.fo
-    | Shlq -> m.flags.fs <- if a == 0L then m.flags.fs else res < 0L;
-              m.flags.fz <- if a == 0L then m.flags.fz else Int64.equal res 0L;
+    | Sarq -> m.flags.fs <- if a = 0L then m.flags.fs else res < 0L;
+              m.flags.fz <- if a = 0L then m.flags.fz else Int64.equal res 0L;
+              m.flags.fo <- if a = 1L then false else m.flags.fo
+    | Shlq -> m.flags.fs <- if a = 0L then m.flags.fs else res < 0L;
+              m.flags.fz <- if a = 0L then m.flags.fz else Int64.equal res 0L;
               let shifted_dest = Int64.shift_right_logical b 62 in
-                m.flags.fo <- if a == 1L then (Int64.equal shifted_dest 2L) || (Int64.equal shifted_dest 1L) else m.flags.fo
-    | Shrq -> m.flags.fs <- if a == 0L then m.flags.fs else res < 0L;
-              m.flags.fz <- if a == 0L then m.flags.fz else Int64.equal res 0L;
-              m.flags.fo <- if a == 1L then b < 0L else m.flags.fo
+                m.flags.fo <- if a = 1L then (Int64.equal shifted_dest 2L) || (Int64.equal shifted_dest 1L) else m.flags.fo
+    | Shrq -> m.flags.fs <- if a = 0L then m.flags.fs else res < 0L;
+              m.flags.fz <- if a = 0L then m.flags.fz else Int64.equal res 0L;
+              m.flags.fo <- if a = 1L then b < 0L else m.flags.fo
     | _ -> failwith "Tried to set condition flags for non-supported operation"
     
 
@@ -256,7 +256,7 @@ let set_cndtn_flags (op:opcode) (a:quad) (b:quad) (res:quad) (m:mach) : unit =
     - update the registers and/or memory appropriately
     - set the condition flags
 *)
-let step (m:mach) : unit = if m.regs.(rind Rip) == exit_addr then () else
+let step (m:mach) : unit = if m.regs.(rind Rip) = exit_addr then () else
   let instruction = 
     match (List.hd (take_sbytes_from_mem m.regs.(rind Rip) 8 m)) with
       | InsB0 inst -> inst
@@ -305,7 +305,7 @@ let step (m:mach) : unit = if m.regs.(rind Rip) == exit_addr then () else
             (*Arithmetic instructions*)
             | Negq -> let dst = List.hd operands in
                         let res = Int64.neg (take_quad dst m) in
-                          set_cndtn_flags Negq 0L 0L res m;
+                          set_cndtn_flags Negq (take_quad dst m) 0L res m;
                           put_quad dst res m
             | Addq -> let src = (List.hd operands) in
                         let dst = (List.hd (List.tl operands)) in
