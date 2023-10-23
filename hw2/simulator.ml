@@ -508,8 +508,8 @@ let assemble (p:prog) : exec =
   in
     {
       entry = find_label addr "main" 1;
-      text_pos = 0x400000L;
-      data_pos = Int64.add 0x400000L text_size;
+      text_pos = mem_bot;
+      data_pos = Int64.add mem_bot text_size;
       text_seg = text_segment;
       data_seg = data_segment;
     }
@@ -537,7 +537,7 @@ let assemble (p:prog) : exec =
   may be of use.
 *)
 let load {entry; text_pos; data_pos; text_seg; data_seg} : mach = 
-  let tmp_mem = Array.make 0xFFF8 InsFrag in
+  let tmp_mem = Array.make (mem_size - 8) InsFrag in
   let t_n_d_segs = Array.append (Array.of_list text_seg) (Array.of_list data_seg)
   in
     (Array.blit t_n_d_segs 0 tmp_mem 0 (Array.length t_n_d_segs);
@@ -545,9 +545,9 @@ let load {entry; text_pos; data_pos; text_seg; data_seg} : mach =
     let memory = Array.append tmp_mem exit_addr_array in
     (* Set all flags to false at initialisation *)
     let flgs = { fo = false; fs = false; fz = false; } in
-    (* Create 17 registers, fill Rip and Rsp *)
-    let registers = Array.make 17 0L
+    (* Create registers, fill Rip and Rsp *)
+    let registers = Array.make nregs 0L
     in
       (Array.set registers (rind Rip) entry;
-        Array.set registers (rind Rsp) 0x40FFF8L;
+        Array.set registers (rind Rsp) @@ Int64.sub mem_top 8L;
         { flags = flgs; regs = registers; mem = memory; }))
