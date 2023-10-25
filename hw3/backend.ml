@@ -250,8 +250,7 @@ let compile_lbl_block fn lbl ctxt blk : elem =
 
    [ NOTE: the first six arguments are numbered 0 .. 5 ]
 *)
-let arg_loc (n : int) : operand =
-failwith "arg_loc not implemented"
+let arg_loc (n : int) : operand = Ind3 (Lit (Int64.of_int (8 * (n + 2))), Rbp)
 
 
 (* We suggest that you create a helper function that computes the
@@ -264,7 +263,12 @@ failwith "arg_loc not implemented"
 
 *)
 let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout =
-failwith "stack_layout not implemented"
+  let rec get_arg_mapping : (uid list) -> ((uid * operand) list) = 
+    fun args1 -> match args1 with
+    | [] -> []
+    | a::at -> (a, arg_loc ((List.length args) - (List.length args1)))::(get_arg_mapping at)
+  in
+  get_arg_mapping args
 
 (* The code for the entry-point of a function must do several things:
 
@@ -283,8 +287,8 @@ failwith "stack_layout not implemented"
      to hold all of the local stack slots.
 *)
 let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg }:fdecl) : prog =
-failwith "compile_fdecl unimplemented"
-
+  failwith "compile_fdecl not implemented"
+    
 
 
 (* compile_gdecl ------------------------------------------------------------ *)
