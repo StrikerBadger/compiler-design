@@ -250,7 +250,15 @@ let compile_lbl_block fn lbl ctxt blk : elem =
 
    [ NOTE: the first six arguments are numbered 0 .. 5 ]
 *)
-let arg_loc (n : int) : operand = Ind3 (Lit (Int64.of_int (8 * (n + 2))), Rbp)
+let arg_loc (n : int) : operand = 
+  match n with
+    | 0 -> Reg Rdi
+    | 1 -> Reg Rsi
+    | 2 -> Reg Rdx
+    | 3 -> Reg Rcx
+    | 4 -> Reg R08
+    | 5 -> Reg R09
+    | _ -> Ind3 (Lit (Int64.of_int (8 * (n - 4))), Rbp)
 
 
 (* We suggest that you create a helper function that computes the
