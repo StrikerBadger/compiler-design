@@ -61,6 +61,22 @@ type ctxt = { tdecls : (tid * ty) list
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
 
+(*Function to get the value of a key in the list (first value)*)
+let rec get_key_value (key:'a) (dict:('a * 'b) list) : 'b =
+  match dict with
+  | [] -> failwith "Key not found in dict"
+  | (k, v)::t -> if k = key then v else get_key_value key t
+
+(*Function to get at most the first n elements of a list*)
+let rec get_first_n (n:int) (lst:'a list) : 'a list =
+  match lst with
+  | [] -> []
+  | h::t -> if n = 0 then [] else h::(get_first_n (n-1) t)
+
+(*Function to get only the last n elements of a list*)
+
+(*Function to get the value of a key in the list (second value)*)
+
 
 (* compiling operands  ------------------------------------------------------ *)
 
@@ -274,7 +290,8 @@ let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout =
   let rec get_arg_mapping : (uid list) -> ((uid * operand) list) = 
     fun args1 -> match args1 with
     | [] -> []
-    | a::at -> (a, arg_loc ((List.length args) - (List.length args1)))::(get_arg_mapping at)
+    | a::at -> let arg_index : int = List.length args - List.length args1 in
+               (a, Ind3 (Lit (Int64.of_int (8* (-arg_index))), Rbp))::(get_arg_mapping at)
   in
   get_arg_mapping args
 
@@ -295,8 +312,16 @@ let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout =
      to hold all of the local stack slots.
 *)
 let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg }:fdecl) : prog =
-  failwith "compile_fdecl not implemented"
-    
+  (*Get the stack layout*)
+  let layout = stack_layout f_param f_cfg in
+  (*Decrement stack pointer for locals storage*)
+  let dec_sp = (Subq, [Imm (Lit (Int64.of_int (-8 * List.length layout))); Reg Rsp]) in
+  (*Copy over the arguments from the argument locations*)
+  let arg_indeces = List.mapi (fun i x -> (x, i)) f_param in (*Argument indeces*)
+  let copy_one_arg = fun (uid_to_op_mapping:uid * operand) : ins -> (Movq, [arg_loc (get_key_value (fst uid_to_op_mapping) arg_indeces); (snd uid_to_op_mapping)]) in
+  let copy_args = List.map copy_one_arg (get_first_n (List.length f_param) layout) in
+  (*Glue the program together and create the elem*)
+  [{ lbl = name; global = true; asm = (Text (dec_sp::copy_args)) }]
 
 
 (* compile_gdecl ------------------------------------------------------------ *)
