@@ -106,8 +106,12 @@ let rec get_first_n (n:int) (lst:'a list) : 'a list =
    destination (usually a register).
 *)
 let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
-  function _ -> failwith "compile_operand unimplemented"
-
+  function (operand:Ll.operand) ->
+    match operand with
+    | Null -> (Movq, [Imm (Lit 0L); dest])
+    | Const c -> (Movq, [Imm (Lit c); dest])
+    | Gid gid -> (Leaq, [Ind3 (Lbl (Platform.mangle gid), Rip); dest])
+    | Id uid -> (Movq, [get_key_value uid ctxt.layout; dest])
 
 
 (* compiling call  ---------------------------------------------------------- *)
@@ -215,9 +219,48 @@ failwith "compile_gep not implemented"
    - Bitcast: does nothing interesting at the assembly level
 *)
 let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
-      failwith "compile_insn not implemented"
+  let open Asm
+  in
+  let pull_operands_and_execute = (
+    match i with
+      | Binop (bop, t, op1, op2) ->
+        (
+        let put_operands (xop1:operand) (xop2:operand) = [compile_operand ctxt xop1 op1; compile_operand ctxt xop2 op2]
+        in
+        match bop with
+        | Add -> put_operands ~%Rbx ~%Rax @ [(Addq, [~%Rbx; ~%Rax])]
+        | Sub -> put_operands ~%Rbx ~%Rax @ [(Subq, [Reg Rbx; Reg Rax])]
+        | Mul -> put_operands ~%Rbx ~%Rax @ [(Imulq, [Reg Rbx; Reg Rax])]
+        | Shl -> put_operands ~%Rax ~%Rcx @ [(Shlq, [Reg Rcx; Reg Rax])]
+        | Lshr -> put_operands ~%Rax ~%Rcx @ [(Shrq, [Reg Rcx; Reg Rax])]
+        | Ashr -> put_operands ~%Rax ~%Rcx @ [(Sarq, [Reg Rcx; Reg Rax])]
+        | And -> put_operands ~%Rbx ~%Rax @ [(Andq, [Reg Rbx; Reg Rax])]
+        | Or -> put_operands ~%Rbx ~%Rax @ [(Orq, [Reg Rbx; Reg Rax])]
+        | Xor -> put_operands ~%Rbx ~%Rax @ [(Xorq, [Reg Rbx; Reg Rax])]
+        )
+      | _ -> failwith "compile_insn not implemented"
+  )
+in
+let put_result = [(Movq, [~%Rax; get_key_value uid ctxt.layout])]
+in
+pull_operands_and_execute @ put_result
 
+(* compiling blocks --------------------------------------------------------- *)
 
+(* A block is a sequence of instructions terminated by a terminator
+   instruction.  The terminator instruction determines the control
+   flow of the program.  For example, a terminator instruction might
+   be a return instruction, which terminates the current function and
+   returns control to the caller.
+
+   The compilation of a block should generate a list of X86
+   instructions that ends with a jump to the appropriate block
+   label. (See compile_terminator below.)
+
+   [ NOTE: the last instruction in a block should be a jump. ]
+
+   [ NOTE: the LLVM IR ensures that every block ends with a
+   terminator instruction. ] *)
 
 (* compiling terminators  --------------------------------------------------- *)
 
@@ -238,9 +281,15 @@ let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
    [fn] - the name of the function containing this terminator
 *)
 let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
-  failwith "compile_terminator not implemented"
-
-
+  let clean_stack = [ (Movq, [Reg Rbp; Reg Rsp]);
+                      (Popq, [Reg Rbp]);
+                      (Retq, [])]
+  in
+  let handle_terminator = match t with
+                            | Ret (Void, _) -> []
+                            | _ -> failwith "compile_terminator not implemented"
+  in
+  clean_stack @ handle_terminator
 (* compiling blocks --------------------------------------------------------- *)
 
 (* We have left this helper function here for you to complete. 
@@ -249,7 +298,7 @@ let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
    [blk]  - LLVM IR code for the block
 *)
 let compile_block (fn:string) (ctxt:ctxt) (blk:Ll.block) : ins list =
-  failwith "compile_block not implemented"
+  []
 
 let compile_lbl_block fn lbl ctxt blk : elem =
   Asm.text (mk_lbl fn lbl) (compile_block fn ctxt blk)
@@ -319,7 +368,7 @@ let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg
   (*Copy over the arguments from the argument locations*)
   let arg_indeces = List.mapi (fun i x -> (x, i)) f_param in (*Argument indeces*)
   let copy_one_arg = fun (uid_to_op_mapping:uid * operand) : ins -> (Movq, [arg_loc (get_key_value (fst uid_to_op_mapping) arg_indeces); (snd uid_to_op_mapping)]) in
-  let copy_args = List.map copy_one_arg (get_first_n (List.length f_param) layout) in
+  let copy_args = List.map copy_one_arg layout in
   (*Glue the program together and create the elem*)
   [{ lbl = name; global = true; asm = (Text (dec_sp::copy_args)) }]
 
