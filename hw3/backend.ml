@@ -223,20 +223,20 @@ let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
   in
   let pull_operands_and_execute = (
     match i with
-      | Binop (bop, t, op1, op2) ->
+      | Binop (bop, _, op1, op2) ->
         (
         let put_operands (xop1:operand) (xop2:operand) = [compile_operand ctxt xop1 op1; compile_operand ctxt xop2 op2]
         in
         match bop with
         | Add -> put_operands ~%Rbx ~%Rax @ [(Addq, [~%Rbx; ~%Rax])]
-        | Sub -> put_operands ~%Rbx ~%Rax @ [(Subq, [Reg Rbx; Reg Rax])]
-        | Mul -> put_operands ~%Rbx ~%Rax @ [(Imulq, [Reg Rbx; Reg Rax])]
-        | Shl -> put_operands ~%Rax ~%Rcx @ [(Shlq, [Reg Rcx; Reg Rax])]
-        | Lshr -> put_operands ~%Rax ~%Rcx @ [(Shrq, [Reg Rcx; Reg Rax])]
-        | Ashr -> put_operands ~%Rax ~%Rcx @ [(Sarq, [Reg Rcx; Reg Rax])]
-        | And -> put_operands ~%Rbx ~%Rax @ [(Andq, [Reg Rbx; Reg Rax])]
-        | Or -> put_operands ~%Rbx ~%Rax @ [(Orq, [Reg Rbx; Reg Rax])]
-        | Xor -> put_operands ~%Rbx ~%Rax @ [(Xorq, [Reg Rbx; Reg Rax])]
+        | Sub -> put_operands ~%Rbx ~%Rax @ [(Subq, [~%Rbx; ~%Rax])]
+        | Mul -> put_operands ~%Rbx ~%Rax @ [(Imulq, [~%Rbx; ~%Rax])]
+        | Shl -> put_operands ~%Rax ~%Rcx @ [(Shlq, [~%Rcx; ~%Rax])]
+        | Lshr -> put_operands ~%Rax ~%Rcx @ [(Shrq, [~%Rcx; ~%Rax])]
+        | Ashr -> put_operands ~%Rax ~%Rcx @ [(Sarq, [~%Rcx; ~%Rax])]
+        | And -> put_operands ~%Rbx ~%Rax @ [(Andq, [~%Rbx; ~%Rax])]
+        | Or -> put_operands ~%Rbx ~%Rax @ [(Orq, [~%Rbx; ~%Rax])]
+        | Xor -> put_operands ~%Rbx ~%Rax @ [(Xorq, [~%Rbx; ~%Rax])]
         )
       | _ -> failwith "compile_insn not implemented"
   )
@@ -281,15 +281,22 @@ let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
    [fn] - the name of the function containing this terminator
 *)
 let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
-  let clean_stack = [ (Movq, [Reg Rbp; Reg Rsp]);
-                      (Popq, [Reg Rbp]);
+  let open Asm
+  in
+  let clean_stack = [ (Movq, [~%Rbp; ~%Rsp]);
+                      (Popq, [~%Rbp]);
                       (Retq, [])]
   in
   let handle_terminator = match t with
-                            | Ret (Void, _) -> []
+                            | Ret (_, None) -> clean_stack
+                            | Ret (_, Some op) -> compile_operand ctxt ~%Rax op::clean_stack
+                            | Br lbl -> [(Jmp, [Lbl (mk_lbl fn lbl)])]
+                            | Cbr (op, lbl1, lbl2) -> [(Cmpq, [Imm (Lit 0L); compile_operand ctxt ~%Rax op]); (* CONTINUE HERE *)
+                                                       (J X86.Eq, [Lbl (mk_lbl fn lbl1)]);
+                                                       (Jmp, [Lbl (mk_lbl fn lbl2)])]
                             | _ -> failwith "compile_terminator not implemented"
   in
-  clean_stack @ handle_terminator
+  handle_terminator
 (* compiling blocks --------------------------------------------------------- *)
 
 (* We have left this helper function here for you to complete. 
@@ -297,8 +304,9 @@ let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
    [ctxt] - the current context
    [blk]  - LLVM IR code for the block
 *)
+(*blk : { insns : (uid * insn) list; term : (uid * terminator) }*)
 let compile_block (fn:string) (ctxt:ctxt) (blk:Ll.block) : ins list =
-  []
+  List.concat_map (compile_insn ctxt) blk.insns @ compile_terminator fn ctxt (snd blk.term)
 
 let compile_lbl_block fn lbl ctxt blk : elem =
   Asm.text (mk_lbl fn lbl) (compile_block fn ctxt blk)
@@ -316,13 +324,15 @@ let compile_lbl_block fn lbl ctxt blk : elem =
    [ NOTE: the first six arguments are numbered 0 .. 5 ]
 *)
 let arg_loc (n : int) : operand = 
+  let open Asm
+  in
   match n with
-    | 0 -> Reg Rdi
-    | 1 -> Reg Rsi
-    | 2 -> Reg Rdx
-    | 3 -> Reg Rcx
-    | 4 -> Reg R08
-    | 5 -> Reg R09
+    | 0 -> ~%Rdi
+    | 1 -> ~%Rsi
+    | 2 -> ~%Rdx
+    | 3 -> ~%Rcx
+    | 4 -> ~%R08
+    | 5 -> ~%R09
     | _ -> Ind3 (Lit (Int64.of_int (8 * (n - 4))), Rbp)
 
 
@@ -340,7 +350,7 @@ let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout =
     fun args1 -> match args1 with
     | [] -> []
     | a::at -> let arg_index : int = List.length args - List.length args1 in
-               (a, Ind3 (Lit (Int64.of_int (8* (-arg_index))), Rbp))::(get_arg_mapping at)
+               (a, Ind3 (Lit (Int64.of_int (8 * (-arg_index))), Rbp))::(get_arg_mapping at)
   in
   get_arg_mapping args
 
@@ -361,16 +371,29 @@ let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout =
      to hold all of the local stack slots.
 *)
 let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg }:fdecl) : prog =
+  let open Asm
+  in
   (*Get the stack layout*)
-  let layout = stack_layout f_param f_cfg in
-  (*Decrement stack pointer for locals storage*)
-  let dec_sp = (Subq, [Imm (Lit (Int64.of_int (-8 * List.length layout))); Reg Rsp]) in
+  let layout = stack_layout f_param f_cfg
+  in
+  let ctxt = { tdecls = tdecls; layout = layout }
+  in
+  (*Decrement stack pointer for locals storage and set new bp *)
+  let dec_sp_and_set_bp = [(Movq, [~%Rsp; ~%Rbp]); (Subq, [Imm (Lit (Int64.of_int (-8 * List.length layout))); ~%Rsp])]
+  in
   (*Copy over the arguments from the argument locations*)
   let arg_indeces = List.mapi (fun i x -> (x, i)) f_param in (*Argument indeces*)
   let copy_one_arg = fun (uid_to_op_mapping:uid * operand) : ins -> (Movq, [arg_loc (get_key_value (fst uid_to_op_mapping) arg_indeces); (snd uid_to_op_mapping)]) in
   let copy_args = List.map copy_one_arg layout in
+  let compiled_lbl_blocks = 
+    let acc_func = fun (elems:elem list) (lbl, blk) -> elems @ [(compile_lbl_block name lbl ctxt blk)]
+    in
+    List.fold_left acc_func [] (snd f_cfg)
+  in
+  let compile_entry = compile_block name ctxt (fst f_cfg)
+  in
   (*Glue the program together and create the elem*)
-  [{ lbl = name; global = true; asm = (Text (dec_sp::copy_args)) }]
+  { lbl = name; global = true; asm = (Text (dec_sp_and_set_bp @ copy_args @ compile_entry))}::compiled_lbl_blocks
 
 
 (* compile_gdecl ------------------------------------------------------------ *)
