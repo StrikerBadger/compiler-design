@@ -61,21 +61,17 @@ type ctxt = { tdecls : (tid * ty) list
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
 
-(*Function to get the value of a key in the list (first value)*)
-let rec get_key_value (key:'a) (dict:('a * 'b) list) : 'b =
-  match dict with
-  | [] -> failwith "Key not found in dict"
-  | (k, v)::t -> if k = key then v else get_key_value key t
-
 (*Function to get at most the first n elements of a list*)
 let rec get_first_n (n:int) (lst:'a list) : 'a list =
   match lst with
   | [] -> []
   | h::t -> if n = 0 then [] else h::(get_first_n (n-1) t)
 
-(*Function to get only the last n elements of a list*)
-
-(*Function to get the value of a key in the list (second value)*)
+(*Function to remove duplicates from a list (preserves ordering)*)
+let rec remove_duplicates (lst:'a list) : 'a list =
+  match lst with
+    | [] -> []
+    | h::tl -> h::remove_duplicates (List.filter (fun (e:'a) -> e <> h) tl)
 
 
 (* compiling operands  ------------------------------------------------------ *)
@@ -111,7 +107,7 @@ let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
     | Null -> (Movq, [Imm (Lit 0L); dest])
     | Const c -> (Movq, [Imm (Lit c); dest])
     | Gid gid -> (Leaq, [Ind3 (Lbl (Platform.mangle gid), Rip); dest])
-    | Id uid -> (Movq, [get_key_value uid ctxt.layout; dest])
+    | Id uid -> (Movq, [lookup ctxt.layout uid; dest])
 
 
 (* compiling call  ---------------------------------------------------------- *)
@@ -221,6 +217,7 @@ failwith "compile_gep not implemented"
 let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
   let open Asm
   in
+  (* If uid is not in dict, add it (0 default value) *)
   let pull_operands_and_execute = (
     match i with
       | Binop (bop, _, op1, op2) ->
@@ -229,7 +226,7 @@ let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
         in
         match bop with
         | Add -> put_operands ~%Rbx ~%Rax @ [(Addq, [~%Rbx; ~%Rax])]
-        | Sub -> put_operands ~%Rbx ~%Rax @ [(Subq, [~%Rbx; ~%Rax])]
+        | Sub -> put_operands ~%Rax ~%Rbx @ [(Subq, [~%Rbx; ~%Rax])]
         | Mul -> put_operands ~%Rbx ~%Rax @ [(Imulq, [~%Rbx; ~%Rax])]
         | Shl -> put_operands ~%Rax ~%Rcx @ [(Shlq, [~%Rcx; ~%Rax])]
         | Lshr -> put_operands ~%Rax ~%Rcx @ [(Shrq, [~%Rcx; ~%Rax])]
@@ -241,7 +238,7 @@ let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
       | _ -> failwith "compile_insn not implemented"
   )
 in
-let put_result = [(Movq, [~%Rax; get_key_value uid ctxt.layout])]
+let put_result = [(Movq, [~%Rax; lookup ctxt.layout uid])]
 in
 pull_operands_and_execute @ put_result
 
@@ -283,18 +280,24 @@ let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
 let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
   let open Asm
   in
-  let clean_stack = [ (Movq, [~%Rbp; ~%Rsp]);
-                      (Popq, [~%Rbp]);
-                      (Retq, [])]
+  let clean_stack = if fn <> "main" then (
+                      [ (Movq, [~%Rbp; ~%Rsp]);
+                        (Popq, [~%Rbp]);
+                        (Retq, [])
+                      ]
+                    ) else (
+                      [ (Movq, [~%Rbp; ~%Rsp]);
+                        (Retq, [])
+                      ]
+                    )
   in
   let handle_terminator = match t with
                             | Ret (_, None) -> clean_stack
                             | Ret (_, Some op) -> compile_operand ctxt ~%Rax op::clean_stack
-                            | Br lbl -> [(Jmp, [Lbl (mk_lbl fn lbl)])]
-                            | Cbr (op, lbl1, lbl2) -> [(Cmpq, [Imm (Lit 0L); compile_operand ctxt ~%Rax op]); (* CONTINUE HERE *)
-                                                       (J X86.Eq, [Lbl (mk_lbl fn lbl1)]);
-                                                       (Jmp, [Lbl (mk_lbl fn lbl2)])]
-                            | _ -> failwith "compile_terminator not implemented"
+                            | Br lbl -> [(Jmp, [~$$(mk_lbl fn lbl)])]
+                            | Cbr (op, lbl1, lbl2) -> compile_operand ctxt ~%Rax op::[(Cmpq, [~$0; ~%Rax]);
+                                                       (J X86.Eq, [~$$(mk_lbl fn lbl1)]);
+                                                       (Jmp, [~$$(mk_lbl fn lbl2)])]
   in
   handle_terminator
 (* compiling blocks --------------------------------------------------------- *)
@@ -346,14 +349,20 @@ let arg_loc (n : int) : operand =
 
 *)
 let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout =
-  let rec get_arg_mapping : (uid list) -> ((uid * operand) list) = 
-    fun args1 -> match args1 with
-    | [] -> []
-    | a::at -> let arg_index : int = List.length args - List.length args1 in
-               (a, Ind3 (Lit (Int64.of_int (8 * (-arg_index))), Rbp))::(get_arg_mapping at)
+  let extract_uids_from_block (b:block) : uid list =
+    List.map (fun (uid_ins:uid * insn) -> fst uid_ins) b.insns
   in
-  get_arg_mapping args
-
+  let extracted_uids : uid list = 
+    extract_uids_from_block block @ List.concat_map (fun ((lbl, block):lbl * block) -> extract_uids_from_block block) lbled_blocks
+  in
+  let all_uids : uid list = remove_duplicates (args @ extracted_uids)
+  in
+  let rec build_layout (uids:uid list) : (uid * operand) list =
+    match uids with
+      | [] -> []
+      | u::us -> (u, Ind3 (Lit (Int64.of_int (-8*(List.length all_uids - List.length us))), Rbp))::build_layout us
+  in
+  build_layout all_uids
 (* The code for the entry-point of a function must do several things:
 
    - since our simple compiler maps local %uids to stack slots,
@@ -383,8 +392,9 @@ let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg
   in
   (*Copy over the arguments from the argument locations*)
   let arg_indeces = List.mapi (fun i x -> (x, i)) f_param in (*Argument indeces*)
-  let copy_one_arg = fun (uid_to_op_mapping:uid * operand) : ins -> (Movq, [arg_loc (get_key_value (fst uid_to_op_mapping) arg_indeces); (snd uid_to_op_mapping)]) in
-  let copy_args = List.map copy_one_arg layout in
+  let copy_one_arg = fun (uid_to_op_mapping:uid * operand) : ins -> (Movq, [arg_loc (lookup arg_indeces (fst uid_to_op_mapping)); (snd uid_to_op_mapping)]) in
+  let copy_args = List.map copy_one_arg (List.filter (fun ((uid, _):uid * operand) -> List.mem uid f_param) layout)
+  in
   let compiled_lbl_blocks = 
     let acc_func = fun (elems:elem list) (lbl, blk) -> elems @ [(compile_lbl_block name lbl ctxt blk)]
     in
