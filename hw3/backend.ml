@@ -291,7 +291,7 @@ let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
         ( 
         let put_operands (xop1:operand) (xop2:operand) = [compile_operand ctxt xop1 op1; compile_operand ctxt xop2 op2]
         in
-        put_operands ~%Rax ~%Rbx @ [(Cmpq, [~%Rax; ~%Rbx]); (Movq, [~$0; ~%Rax]); (Set (compile_cnd cnd), [~%Rax])]
+        put_operands ~%Rbx ~%Rax @ [(Cmpq, [~%Rax; ~%Rbx]); (Movq, [~$0; ~%Rax]); (Set (compile_cnd cnd), [~%Rax])]
         )
       | Alloca _ -> [(Pushq, [~$0]); (Movq, [~%Rsp; ~%Rax])]
       | Load (_, op) -> 
