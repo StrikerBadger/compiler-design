@@ -317,10 +317,8 @@ let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
           | Gid gid -> failwith "trying to store to global id"
           | Id uid -> put_val @ [(Movq, [lookup ctxt.layout uid; ~%Rbx]); (Movq, [~%Rax; Ind2 Rbx])]
         )
-      | Call (_, op1, args) ->
-        (
-          compile_call ctxt op1 (List.map (fun ((ty, op):ty * Ll.operand) -> op) args)
-        )
+      | Call (_, op1, args) -> compile_call ctxt op1 (List.map (fun ((ty, op):ty * Ll.operand) -> op) args)
+      | Bitcast (_, op, _) -> [compile_operand ctxt ~%Rax op]
       | _ -> failwith "compile_insn not implemented"
   )
 in
