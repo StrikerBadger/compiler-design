@@ -63,9 +63,10 @@ let lookup m x = List.assoc x m
 
 (*Function to get at most the first n elements of a list*)
 let rec get_first_n (n:int) (lst:'a list) : 'a list =
-  match lst with
-  | [] -> []
-  | h::t -> if n = 0 then [] else h::(get_first_n (n-1) t)
+  if n < 1 then [] else 
+    match lst with
+    | [] -> []
+    | h::t -> if n = 0 then [] else h::(get_first_n (n-1) t)
 
 (*Function to remove duplicates from a list (preserves ordering)*)
 let rec remove_duplicates (lst:'a list) : 'a list =
@@ -112,6 +113,25 @@ let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
 
 (* compiling call  ---------------------------------------------------------- *)
 
+(* This helper function computes the location of the nth incoming
+   function argument: either in a register or relative to %rbp,
+   according to the calling conventions.  You might find it useful for
+   compile_fdecl.
+
+   [ NOTE: the first six arguments are numbered 0 .. 5 ]
+*)
+let arg_loc (n : int) : operand = 
+  let open Asm
+  in
+  match n with
+    | 0 -> ~%Rdi
+    | 1 -> ~%Rsi
+    | 2 -> ~%Rdx
+    | 3 -> ~%Rcx
+    | 4 -> ~%R08
+    | 5 -> ~%R09
+    | _ -> Ind3 (Lit (Int64.of_int (8 * (n - 4))), Rbp)
+
 (* You will probably find it helpful to implement a helper function that
    generates code for the LLVM IR call instruction.
 
@@ -129,7 +149,39 @@ let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
    [ NOTE: Don't forget to preserve caller-save registers (only if
    needed). ]
 *)
-
+let compile_call (ctxt:ctxt) (fnctn_pointer:Ll.operand) (args:Ll.operand list) : ins list = 
+  let open Asm 
+  in
+  (*let align_stack = [(Andq, [~$(-16); ~%Rsp])]
+  in*)
+  let args : operand list =
+    let get_val_of_operand (op:Ll.operand) : operand =
+      match op with
+       | Null -> failwith "Null pointer value?"
+       | Const c -> Imm (Lit c)
+       | Gid gid -> Ind3 (Lbl (Platform.mangle gid), Rip)
+       | Id uid -> lookup ctxt.layout uid
+    in
+    List.map get_val_of_operand args
+  in
+  let put_args : ins list = 
+    let put_arg_to_reg (i:int) (argop:operand) : ins list =
+      if i < 6 then 
+        (
+        [(Movq, [argop; arg_loc i])]
+        )
+      else
+        (
+        failwith "argument index to high to put in reg"
+        )
+    in 
+    let put_arg_on_stack (argop:operand) : ins list = [(Pushq, [argop])]
+    in
+    List.concat (List.mapi put_arg_to_reg (get_first_n 6 args) @ List.map put_arg_on_stack (get_first_n (List.length args - 6) (List.rev args)))
+  in
+  let call : ins list = [compile_operand ctxt ~%Rax fnctn_pointer; (Callq, [~%Rax])]
+  in
+  put_args @ call
 
 
 
@@ -235,6 +287,40 @@ let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
         | Or -> put_operands ~%Rbx ~%Rax @ [(Orq, [~%Rbx; ~%Rax])]
         | Xor -> put_operands ~%Rbx ~%Rax @ [(Xorq, [~%Rbx; ~%Rax])]
         )
+      | Icmp (cnd, _, op1, op2) -> 
+        ( 
+        let put_operands (xop1:operand) (xop2:operand) = [compile_operand ctxt xop1 op1; compile_operand ctxt xop2 op2]
+        in
+        put_operands ~%Rax ~%Rbx @ [(Cmpq, [~%Rax; ~%Rbx]); (Movq, [~$0; ~%Rax]); (Set (compile_cnd cnd), [~%Rax])]
+        )
+      | Alloca _ -> [(Pushq, [~$0]); (Movq, [~%Rsp; ~%Rax])]
+      | Load (_, op) -> 
+        (
+        match op with
+          | Null -> failwith "tried to load from Null"
+          | Const c -> [(Movq, [Ind1 (Lit c); ~%Rax])]
+          | Gid gid -> [(Leaq, [Ind3 (Lbl (Platform.mangle gid), Rip); ~%Rax]); (Movq, [Ind2 Rax; ~%Rax])]
+          | Id uid -> [(Movq, [lookup ctxt.layout uid; ~%Rax]); (Movq, [Ind2 Rax; ~%Rax])]
+        )
+      | Store (_, op1, op2) -> 
+        (
+        let put_val : ins list = 
+          match op1 with
+          | Null -> failwith "Null has no value"
+          | Const c -> [(Movq, [Imm (Lit c); ~%Rax])]
+          | Gid gid -> [(Leaq, [Ind3 (Lbl (Platform.mangle gid), Rip); ~%Rax]); (Movq, [Ind2 Rax; ~%Rax])]
+          | Id uid -> [(Movq, [lookup ctxt.layout uid; ~%Rax])]
+        in
+        match op2 with
+          | Null -> failwith "tried to store to Null"
+          | Const c -> put_val @ [(Movq, [~%Rax; Ind1 (Lit c)])]
+          | Gid gid -> failwith "trying to store to global id"
+          | Id uid -> put_val @ [(Movq, [lookup ctxt.layout uid; ~%Rbx]); (Movq, [~%Rax; Ind2 Rbx])]
+        )
+      | Call (_, op1, args) ->
+        (
+          compile_call ctxt op1 (List.map (fun ((ty, op):ty * Ll.operand) -> op) args)
+        )
       | _ -> failwith "compile_insn not implemented"
   )
 in
@@ -280,7 +366,7 @@ let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
 let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
   let open Asm
   in
-  let clean_stack = if fn <> "main" then (
+  let clean_stack = if Platform.mangle fn <> Platform.mangle "main" then (
                       [ (Movq, [~%Rbp; ~%Rsp]);
                         (Popq, [~%Rbp]);
                         (Retq, [])
@@ -295,7 +381,7 @@ let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
                             | Ret (_, None) -> clean_stack
                             | Ret (_, Some op) -> compile_operand ctxt ~%Rax op::clean_stack
                             | Br lbl -> [(Jmp, [~$$(mk_lbl fn lbl)])]
-                            | Cbr (op, lbl1, lbl2) -> compile_operand ctxt ~%Rax op::[(Cmpq, [~$0; ~%Rax]);
+                            | Cbr (op, lbl1, lbl2) -> compile_operand ctxt ~%Rax op::[(Cmpq, [~$1; ~%Rax]);
                                                        (J X86.Eq, [~$$(mk_lbl fn lbl1)]);
                                                        (Jmp, [~$$(mk_lbl fn lbl2)])]
   in
@@ -317,26 +403,6 @@ let compile_lbl_block fn lbl ctxt blk : elem =
 
 
 (* compile_fdecl ------------------------------------------------------------ *)
-
-
-(* This helper function computes the location of the nth incoming
-   function argument: either in a register or relative to %rbp,
-   according to the calling conventions.  You might find it useful for
-   compile_fdecl.
-
-   [ NOTE: the first six arguments are numbered 0 .. 5 ]
-*)
-let arg_loc (n : int) : operand = 
-  let open Asm
-  in
-  match n with
-    | 0 -> ~%Rdi
-    | 1 -> ~%Rsi
-    | 2 -> ~%Rdx
-    | 3 -> ~%Rcx
-    | 4 -> ~%R08
-    | 5 -> ~%R09
-    | _ -> Ind3 (Lit (Int64.of_int (8 * (n - 4))), Rbp)
 
 
 (* We suggest that you create a helper function that computes the
@@ -388,12 +454,20 @@ let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg
   let ctxt = { tdecls = tdecls; layout = layout }
   in
   (*Decrement stack pointer for locals storage and set new bp *)
-  let dec_sp_and_set_bp = [(Movq, [~%Rsp; ~%Rbp]); (Subq, [Imm (Lit (Int64.of_int (-8 * List.length layout))); ~%Rsp])]
+  let dec_sp_and_set_bp = 
+    let push_and_set_base_pointer = 
+      if Platform.mangle "main" <> Platform.mangle name then
+        [(Pushq, [~%Rbp])]
+      else []
+    in
+    push_and_set_base_pointer @ [(Movq, [~%Rsp; ~%Rbp]); (Subq, [Imm (Lit (Int64.of_int (8 * List.length layout))); ~%Rsp])]
   in
   (*Copy over the arguments from the argument locations*)
   let arg_indeces = List.mapi (fun i x -> (x, i)) f_param in (*Argument indeces*)
-  let copy_one_arg = fun (uid_to_op_mapping:uid * operand) : ins -> (Movq, [arg_loc (lookup arg_indeces (fst uid_to_op_mapping)); (snd uid_to_op_mapping)]) in
-  let copy_args = List.map copy_one_arg (List.filter (fun ((uid, _):uid * operand) -> List.mem uid f_param) layout)
+  let copy_one_arg = fun (uid_to_op_mapping:uid * operand) : ins list ->
+    [(Movq, [arg_loc (lookup arg_indeces (fst uid_to_op_mapping)); ~%Rax]); (Movq, [~%Rax; (snd uid_to_op_mapping)])]
+  in
+  let copy_args = List.concat_map copy_one_arg (List.filter (fun ((uid, _):uid * operand) -> List.mem uid f_param) layout)
   in
   let compiled_lbl_blocks = 
     let acc_func = fun (elems:elem list) (lbl, blk) -> elems @ [(compile_lbl_block name lbl ctxt blk)]
