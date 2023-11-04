@@ -208,7 +208,13 @@ let compile_call (ctxt:ctxt) (fnctn_pointer:Ll.operand) (args:Ll.operand list) :
      Your function should simply return 0 in those cases
 *)
 let rec size_ty (tdecls:(tid * ty) list) (t:Ll.ty) : int =
-failwith "size_ty not implemented"
+  match t with
+    | Void | I8 | Fun _ -> 0
+    | I1 | I64 | Ptr _ -> 8
+    | Array(n, subt) -> n * (size_ty tdecls subt)
+    | Namedt(tid) -> size_ty tdecls @@ lookup tdecls tid
+    | Struct tys -> List.fold_left (+) 0 @@ List.map (size_ty tdecls) tys
+
 
 
 
