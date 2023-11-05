@@ -170,7 +170,7 @@ let compile_call (ctxt:ctxt) (fnctn_pointer:Ll.operand) (args:Ll.operand list) :
   let args : operand list =
     let get_val_of_operand (op:Ll.operand) : operand =
       match op with
-       | Null -> failwith "Null pointer value?"
+       | Null -> ~$0
        | Const c -> Imm (Lit c)
        | Gid gid -> Ind3 (Lbl (Platform.mangle gid), Rip)
        | Id uid -> lookup ctxt.layout uid
@@ -391,10 +391,13 @@ let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
       | Bitcast (_, op, _) -> [compile_operand ctxt ~%Rax op]
       | Gep (ty, base, path) -> compile_gep ctxt (ty, base) path
   )
-in
-let put_result = [(Movq, [~%Rax; lookup ctxt.layout uid])]
-in
-pull_operands_and_execute @ put_result
+  in
+  let put_result = 
+    match i with
+      | Call (Void, _, _) -> []
+      | _ -> [(Movq, [~%Rax; lookup ctxt.layout uid])]
+  in
+  pull_operands_and_execute @ put_result
 
 (* compiling blocks --------------------------------------------------------- *)
 
@@ -434,16 +437,7 @@ let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
 let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
   let open Asm
   in
-  let clean_stack = if Platform.mangle fn <> Platform.mangle "main" then (
-                      [ (Movq, [~%Rbp; ~%Rsp]);
-                        (Popq, [~%Rbp]);
-                        (Retq, [])
-                      ]
-                    ) else (
-                      [ (Movq, [~%Rbp; ~%Rsp]);
-                        (Retq, [])
-                      ]
-                    )
+  let clean_stack = [(Movq, [~%Rbp; ~%Rsp]); (Popq, [~%Rbp]); (Retq, [])]
   in
   let handle_terminator = match t with
                             | Ret (_, None) -> clean_stack
@@ -523,12 +517,7 @@ let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg
   in
   (*Decrement stack pointer for locals storage and set new bp *)
   let dec_sp_and_set_bp = 
-    let push_and_set_base_pointer = 
-      if Platform.mangle "main" <> Platform.mangle name then
-        [(Pushq, [~%Rbp])]
-      else []
-    in
-    push_and_set_base_pointer @ [(Movq, [~%Rsp; ~%Rbp]); (Subq, [Imm (Lit (Int64.of_int (8 * List.length layout))); ~%Rsp])]
+    [(Pushq, [~%Rbp]); (Movq, [~%Rsp; ~%Rbp]); (Subq, [Imm (Lit (Int64.of_int (8 * List.length layout))); ~%Rsp])]
   in
   (*Copy over the arguments from the argument locations*)
   let arg_indeces = List.mapi (fun i x -> (x, i)) f_param in (*Argument indeces*)

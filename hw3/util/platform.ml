@@ -100,7 +100,7 @@ let create_output_dir () =
 
 
 (* clang invocation stuff --------------------------------------------------- *)
-let common_flags = "-Wno-override-module -Wno-unused-command-line-argument -mstack-alignment=16"
+let common_flags = "-Wno-override-module -Wno-unused-command-line-argument -mstack-alignment=8"
 
 let clang_ll_mode = "-S"
 
