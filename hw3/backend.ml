@@ -61,6 +61,19 @@ type ctxt = { tdecls : (tid * ty) list
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
 
+(*Function to print types*)
+let rec string_of_ty (ty:Ll.ty) (tdecls:(tid * ty) list): string =
+  match ty with
+    | Void -> "Void"
+    | I1 -> "I1"
+    | I8 -> "I8"
+    | I64 -> "I64"
+    | Ptr t -> "Ptr " ^ string_of_ty t tdecls
+    | Fun (tys, t) -> "Fun (" ^ (String.concat ", " (List.map (fun tys -> string_of_ty tys tdecls) tys)) ^ ", " ^ string_of_ty t tdecls ^ ")"
+    | Array (n, t) -> "Array (" ^ string_of_int n ^ ", " ^ string_of_ty t  tdecls^ ")"
+    | Struct ts -> "Struct (" ^ (String.concat ", " (List.map (fun ts -> string_of_ty ts tdecls) ts)) ^ ")"
+    | Namedt tid -> string_of_ty (lookup tdecls tid) tdecls
+
 (*Function to get at most the first n elements of a list*)
 let rec get_first_n (n:int) (lst:'a list) : 'a list =
   if n < 1 then [] else 
@@ -244,8 +257,59 @@ let rec size_ty (tdecls:(tid * ty) list) (t:Ll.ty) : int =
       in (4), but relative to the type f the sub-element picked out
       by the path so far
 *)
-let compile_gep (ctxt:ctxt) (op : Ll.ty * Ll.operand) (path: Ll.operand list) : ins list =
-failwith "compile_gep not implemented"
+let compile_gep (ctxt:ctxt) ((ty, op): Ll.ty * Ll.operand) (path: Ll.operand list) : ins list =
+  let open Asm 
+  in
+  let ty : Ll.ty = 
+    match ty with
+      | Ptr t -> t
+      | _ -> failwith "gep operand not a pointer"
+  in
+  let ty : Ll.ty =
+    match ty with
+      | Namedt tid -> lookup ctxt.tdecls tid
+      | _ -> ty
+  in
+  let get_base_adress : ins list = [compile_operand ctxt ~%Rax op]
+  in
+  let index_array : ins list = [compile_operand ctxt ~%Rbx (List.hd path); (Imulq, [~$(size_ty ctxt.tdecls ty); ~%Rbx]); (Addq, [~%Rbx; ~%Rax])]
+  in
+  let path : Ll.operand list = List.tl path
+  in
+  let rec index_subsequent (ty:Ll.ty) (path:Ll.operand list): ins list =
+    if path = [] then [] else
+    match ty with
+      | Struct tys -> 
+        (
+        let rec get_offset (tys:Ll.ty list) (index:int) : int =
+          match tys with
+            | [] -> failwith "struct has no types"
+            | h::t -> if index = 0 then 0 else size_ty ctxt.tdecls h + get_offset t (index - 1)
+        in
+        let index = match List.hd path with
+                      | Const c -> Int64.to_int c
+                      | _ -> failwith "index in struct not a constant"
+        in
+        let deeper_type : Ll.ty = List.nth tys index
+        in
+        let deeper_type : Ll.ty =
+          match deeper_type with
+            | Namedt tid -> lookup ctxt.tdecls tid
+            | _ -> deeper_type
+        in 
+        [Addq, [~$(get_offset tys index); ~%Rax]] @ index_subsequent deeper_type (List.tl path)
+        )
+      | Array (n, subt) -> 
+        (
+        [compile_operand ctxt ~%Rbx (List.hd path); (Imulq, [~$(size_ty ctxt.tdecls subt); ~%Rbx]); (Addq, [~%Rbx; ~%Rax])] @ index_subsequent subt (List.tl path)
+        )
+      | _ ->  print_endline ("Failed at: " ^ string_of_ty ty ctxt.tdecls);
+              failwith "path is invalid"
+    in
+    if path = [] then get_base_adress @ index_array else
+      get_base_adress @ index_array @ index_subsequent ty path
+
+  
 
 
 
@@ -325,7 +389,7 @@ let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
         )
       | Call (_, op1, args) -> compile_call ctxt op1 (List.map (fun ((ty, op):ty * Ll.operand) -> op) args)
       | Bitcast (_, op, _) -> [compile_operand ctxt ~%Rax op]
-      | _ -> failwith "compile_insn not implemented"
+      | Gep (ty, base, path) -> compile_gep ctxt (ty, base) path
   )
 in
 let put_result = [(Movq, [~%Rax; lookup ctxt.layout uid])]
