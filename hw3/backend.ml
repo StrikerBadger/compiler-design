@@ -165,8 +165,6 @@ let arg_loc (n : int) : operand =
 let compile_call (ctxt:ctxt) (fnctn_pointer:Ll.operand) (args:Ll.operand list) : ins list = 
   let open Asm 
   in
-  (*let align_stack = [(Andq, [~$(-16); ~%Rsp])]
-  in*)
   let args : operand list =
     let get_val_of_operand (op:Ll.operand) : operand =
       match op with
@@ -181,20 +179,30 @@ let compile_call (ctxt:ctxt) (fnctn_pointer:Ll.operand) (args:Ll.operand list) :
     let put_arg_to_reg (i:int) (argop:operand) : ins list =
       if i < 6 then 
         (
-        [(Movq, [argop; arg_loc i])]
+        match argop with
+          | Ind3 (_, Rip) -> [(Leaq, [argop; arg_loc i])]
+          | _ -> [(Movq, [argop; arg_loc i])]
         )
       else
         (
         failwith "argument index to high to put in reg"
         )
     in 
-    let put_arg_on_stack (argop:operand) : ins list = [(Pushq, [argop])]
+    let put_arg_on_stack (argop:operand) : ins list = 
+      match argop with
+          | Ind3 (_, Rip) -> [(Leaq, [argop; ~%Rax]); (Pushq, [~%Rax])]
+          | _ -> [(Pushq, [argop])]
     in
     List.concat (List.mapi put_arg_to_reg (get_first_n 6 args) @ List.map put_arg_on_stack (get_first_n (List.length args - 6) (List.rev args)))
   in
-  let call : ins list = [compile_operand ctxt ~%Rax fnctn_pointer; (Callq, [~%Rax])]
+  let call : ins list = 
+    match fnctn_pointer with
+      | Null -> failwith "tried to call Null"
+      | Const c -> [(Callq, [Imm (Lit c)])]
+      | Gid gid -> [(Callq, [Imm (Lbl (Platform.mangle gid))])]
+      | Id uid -> [compile_operand ctxt ~%Rax fnctn_pointer; (Callq, [lookup ctxt.layout uid])]
   in
-  put_args @ call
+  [Andq, [Imm(Lit(-16L)); Reg Rsp]] @ put_args @ call
 
 
 
