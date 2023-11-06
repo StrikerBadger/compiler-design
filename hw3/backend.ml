@@ -303,8 +303,7 @@ let compile_gep (ctxt:ctxt) ((ty, op): Ll.ty * Ll.operand) (path: Ll.operand lis
         (
         [compile_operand ctxt ~%Rbx (List.hd path); (Imulq, [~$(size_ty ctxt.tdecls subt); ~%Rbx]); (Addq, [~%Rbx; ~%Rax])] @ index_subsequent subt (List.tl path)
         )
-      | _ ->  print_endline ("Failed at: " ^ Llutil.string_of_ty ty);
-              failwith "path is invalid"
+      | _ ->  failwith "path is invalid"
     in
     if path = [] then get_base_adress @ index_array else
       get_base_adress @ index_array @ index_subsequent ty path
