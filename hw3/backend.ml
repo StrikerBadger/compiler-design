@@ -61,19 +61,6 @@ type ctxt = { tdecls : (tid * ty) list
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
 
-(*Function to print types*)
-let rec string_of_ty (ty:Ll.ty) (tdecls:(tid * ty) list): string =
-  match ty with
-    | Void -> "Void"
-    | I1 -> "I1"
-    | I8 -> "I8"
-    | I64 -> "I64"
-    | Ptr t -> "Ptr " ^ string_of_ty t tdecls
-    | Fun (tys, t) -> "Fun (" ^ (String.concat ", " (List.map (fun tys -> string_of_ty tys tdecls) tys)) ^ ", " ^ string_of_ty t tdecls ^ ")"
-    | Array (n, t) -> "Array (" ^ string_of_int n ^ ", " ^ string_of_ty t  tdecls^ ")"
-    | Struct ts -> "Struct (" ^ (String.concat ", " (List.map (fun ts -> string_of_ty ts tdecls) ts)) ^ ")"
-    | Namedt tid -> string_of_ty (lookup tdecls tid) tdecls
-
 (*Function to get at most the first n elements of a list*)
 let rec get_first_n (n:int) (lst:'a list) : 'a list =
   if n < 1 then [] else 
@@ -286,6 +273,11 @@ let compile_gep (ctxt:ctxt) ((ty, op): Ll.ty * Ll.operand) (path: Ll.operand lis
   in
   let rec index_subsequent (ty:Ll.ty) (path:Ll.operand list): ins list =
     if path = [] then [] else
+    let ty : Ll.ty =
+      match ty with
+        | Namedt tid -> lookup ctxt.tdecls tid
+        | _ -> ty
+    in
     match ty with
       | Struct tys -> 
         (
@@ -311,7 +303,7 @@ let compile_gep (ctxt:ctxt) ((ty, op): Ll.ty * Ll.operand) (path: Ll.operand lis
         (
         [compile_operand ctxt ~%Rbx (List.hd path); (Imulq, [~$(size_ty ctxt.tdecls subt); ~%Rbx]); (Addq, [~%Rbx; ~%Rax])] @ index_subsequent subt (List.tl path)
         )
-      | _ ->  print_endline ("Failed at: " ^ string_of_ty ty ctxt.tdecls);
+      | _ ->  print_endline ("Failed at: " ^ Llutil.string_of_ty ty);
               failwith "path is invalid"
     in
     if path = [] then get_base_adress @ index_array else
@@ -392,7 +384,7 @@ let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
         match op2 with
           | Null -> failwith "tried to store to Null"
           | Const c -> put_val @ [(Movq, [~%Rax; Ind1 (Lit c)])]
-          | Gid gid -> failwith "trying to store to global id"
+          | Gid gid -> put_val @ [(Leaq, [Ind3 (Lbl (Platform.mangle gid), Rip); ~%Rbx]); (Movq, [~%Rax; Ind2 Rbx])]
           | Id uid -> put_val @ [(Movq, [lookup ctxt.layout uid; ~%Rbx]); (Movq, [~%Rax; Ind2 Rbx])]
         )
       | Call (_, op1, args) -> compile_call ctxt op1 (List.map (fun ((ty, op):ty * Ll.operand) -> op) args)
