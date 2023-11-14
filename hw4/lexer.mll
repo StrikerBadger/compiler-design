@@ -29,6 +29,9 @@
   ("null", NULL);
   ("void", TVOID);
   ("int", TINT);
+  ("bool", TBOOL);
+  ("true", TRUE);
+  ("false", FALSE);
   ("string", TSTRING);
   ("else", ELSE);
   ("if", IF);
@@ -36,6 +39,8 @@
   ("return", RETURN);
   ("var", VAR);
   ("global", GLOBAL);
+  ("new", NEW);
+  ("for", FOR);
 
   (* Symbols *)
   ( ";", SEMI);
@@ -45,6 +50,18 @@
   ( "+", PLUS);
   ( "-", DASH);
   ( "*", STAR);
+  ( "<<", LTLT);
+  ( ">>", GTGT);
+  ( ">>>", GTGTGT);
+  ( "<", LT);
+  ( "<=", LTEQ);
+  ( ">", GT);
+  ( ">=", GTEQ);
+  ( "!=", BANGEQ);
+  ( "&", AMP);
+  ( "|", PIPE);
+  ( "[&]", OSAMPCS);
+  ( "[|]", OSPIPECS);
   ( "=", EQ);
   ( "==", EQEQ);
   ( "!", BANG);
@@ -53,6 +70,7 @@
   ( ")", RPAREN);
   ( "[", LBRACKET);
   ( "]", RBRACKET);
+  ( "[]", LRBRA)
   ]
 
 let (symbol_table : (string, Parser.token) Hashtbl.t) = Hashtbl.create 1024
