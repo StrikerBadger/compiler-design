@@ -53,11 +53,22 @@ let loc (startpos:Lexing.position) (endpos:Lexing.position) (elt:'a) : 'a node =
 %token RBRACKET /* ] */
 %token TILDE    /* ~ */
 %token BANG     /* ! */
-%token LRBRA    /* [] */
 %token GLOBAL   /* global */
+%token LRBRA    /* LRBRA */
 
+%left OSPIPECS
+%left OSAMPCS
+%left PIPE
+%left AMP
+%left EQEQ BANGEQ 
+%left LT LTEQ GT GTEQ
+%left LTLT GTGT GTGTGT
 %left PLUS DASH
 %left STAR
+
+
+ 
+
 %nonassoc BANG
 %nonassoc TILDE
 %nonassoc LBRACKET
@@ -107,7 +118,7 @@ ty:
 
 %inline rtyp:
   | TSTRING { RString }
-  | t=ty LBRACKET RBRACKET { RArray t }
+  | t=ty LRBRA { RArray t }
 
 %inline bop:
   | PLUS      { Add }
@@ -182,7 +193,7 @@ stmt:
   | RETURN e=exp SEMI   { loc $startpos $endpos @@ Ret(Some e) }
   | WHILE LPAREN e=exp RPAREN b=block  
                         { loc $startpos $endpos @@ While(e, b) } 
-  | FOR LPAREN vdes=separated_list(COMMA, vdecl) SEMI e=option(exp) SEMI s=option(stmt) SEMI b=block
+  | FOR LPAREN vdes=separated_list(COMMA, vdecl) SEMI e=option(exp) SEMI s=option(stmt) RPAREN b=block
                         { loc $startpos $endpos @@ For (vdes, e, s, b) }
 
 block:
