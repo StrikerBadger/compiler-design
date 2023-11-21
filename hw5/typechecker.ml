@@ -115,7 +115,28 @@ and subtype_ref (c : Tctxt.t) (t1 : Ast.rty) (t2 : Ast.rty) : bool =
     - tc contains the structure definition context
  *)
 let rec typecheck_ty (l : 'a Ast.node) (tc : Tctxt.t) (t : Ast.ty) : unit =
-  failwith "todo: implement typecheck_ty"
+  match t with
+    | TBool | TInt -> ()
+    | TRef rty | TNullRef rty -> typecheck_rty l tc rty
+
+and typecheck_rty (l : 'a Ast.node) (tc : Tctxt.t) (t : Ast.rty) : unit =
+  let typecheck_ret_ty (r : Ast.ret_ty) : unit =
+    match r with
+    | RetVoid -> ()
+    | RetVal t -> typecheck_ty l tc t
+  in
+  match t with
+    | RString -> ()
+    | RArray arrty -> typecheck_ty l tc arrty
+    | RStruct id -> (
+      match lookup_struct_option id tc with
+        | Some _ -> ()
+        | None -> type_error l ("Undefined struct type " ^ id)
+      )
+    | RFun (args, ret) -> (
+      List.iter (typecheck_ty l tc) args;
+      typecheck_ret_ty ret
+    )
 
 (* typechecking expressions ------------------------------------------------- *)
 (* Typechecks an expression in the typing context c, returns the type of the
