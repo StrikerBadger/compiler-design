@@ -47,11 +47,56 @@ let typ_of_unop : Ast.unop -> Ast.ty * Ast.ty = function
       (Don't forget about OCaml's 'and' keyword.)
 *)
 let rec subtype (c : Tctxt.t) (t1 : Ast.ty) (t2 : Ast.ty) : bool =
-  failwith "todo: subtype"
+  match t2 with
+    | TInt -> t1 = TInt
+    | TBool -> t1 = TBool
+    | TRef t2' -> (
+      match t1 with
+        | TRef t1' -> subtype_ref c t1' t2'
+        | _ -> false
+      )
+    | TNullRef rty2 -> (
+      match t1 with
+        | TNullRef _ -> true
+        | TRef rty1 -> subtype_ref c rty1 rty2
+        | _ -> false
+      )
 
 (* Decides whether H |-r ref1 <: ref2 *)
 and subtype_ref (c : Tctxt.t) (t1 : Ast.rty) (t2 : Ast.rty) : bool =
-  failwith "todo: subtype_ref"
+  let subtype_ret_ty (r1 : Ast.ret_ty) (r2 : Ast.ret_ty) : bool =
+    match r1, r2 with
+    | RetVoid, RetVoid -> true
+    | RetVal t1, RetVal t2 -> subtype c t1 t2
+    | _ -> false
+  in
+  match t2 with
+    | RString -> t1 = RString
+    | RArray arrty2 -> (
+      match t1 with
+        | RArray arrty1 -> arrty1 = arrty2
+        | _ -> false
+      )
+    | RStruct id2 -> (
+      let structfields2 = lookup_struct id2 c in
+      match t1 with
+        | RStruct id1 -> (
+          let rec check_fields (fs2 : Ast.field list) : bool =
+            match fs2 with
+              | [] -> true
+              | field::fs2' -> (lookup_field_option id1 field.fieldName c = Some field.ftyp) && (check_fields fs2')
+          in
+          check_fields structfields2
+        )
+        | _ -> false
+      )
+    | RFun (args2, ret2) -> (
+      match t1 with
+        | RFun (args1, ret1) -> (List.length args1 = List.length args2) &&
+                                (List.for_all2 (fun t1 t2 -> subtype c t2 t1) args1 args2) &&
+                                subtype_ret_ty ret1 ret2
+        | _ -> false
+      )
 
 
 (* well-formed types -------------------------------------------------------- *)
