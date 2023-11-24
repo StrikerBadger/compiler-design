@@ -244,7 +244,22 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
           )
         | None -> type_error e ("Struct type " ^ id ^ " not in context")
     )
-  (* CONTINUE HERE with next match case (Proj) *)
+  | Proj (exp, id) -> (
+    match typecheck_exp c exp with
+      | TRef (RStruct sid) -> (
+        match lookup_struct_option sid c with
+          | None -> type_error e "Struct on which field access was tried is not in context"
+          | Some fields -> (
+            match lookup_field_option sid id c with
+              | None -> type_error e "Tried to access non-existing struct field"
+              | Some ty -> ty
+            )
+        )
+      | _ -> type_error e "Proj expression is not a struct"
+    )
+  | Call (fexp, argexps) -> (
+    failwith "DONT KNOW WHAT TO DO HERE"
+    )
   | _ -> failwith "todo: implement typecheck_exp"
 
 (* statements --------------------------------------------------------------- *)
