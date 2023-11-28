@@ -404,7 +404,7 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
           )
         | _ -> type_error s "Call expression is not a function"
       )
-    | If (con_exp, true_block, false_block) -> (
+    | If (con_exp, true_block, false_block) -> ( (* NEEDS FIXING *)
         match con_exp.elt with
           | Bop (Eq, exp1, exp2) -> (
             let t1 = typecheck_exp tc exp1 in
@@ -426,7 +426,57 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
             )
           | _ -> type_error s "Condition expression in if statement is not an equality comparison"
       )
-    | _ -> failwith "todo: implement typecheck_stmt"
+    | While (con_exp, block) -> (
+        match typecheck_exp tc con_exp with
+          | TBool -> (
+            let (_, _) = typecheck_block tc block in
+            tc,  false
+            )
+          | _ -> type_error s "Condition expression in while statement is not of type bool"
+      )
+    | For (vdecls, con_exp, inc_stmt, block) -> (
+        let rec check_vdecls (c:Tctxt.t) (vdecls:Ast.vdecl list) : Tctxt.t =
+          match vdecls with
+            | [] -> c
+            | vdecl::vdecls' -> (
+              let (c', _) = typecheck_stmt c { elt=(Decl vdecl); loc=(snd vdecl).loc } to_ret in
+              check_vdecls c' vdecls'
+              )
+        in
+        let c' = check_vdecls tc vdecls in
+        let con_exp = match con_exp with
+          | None -> {elt=(CBool true); loc=s.loc}
+          | Some con_exp -> con_exp
+        in
+        match typecheck_exp c' con_exp with
+          | TBool -> (
+            let (_, _) = typecheck_block c' block in
+            match inc_stmt with
+              | None -> tc, false
+              | Some inc_stmt -> 
+                let (c, _) = typecheck_stmt tc inc_stmt to_ret in
+                c, false
+            )
+          | _ -> type_error s "Condition expression in for statement is not of type bool"
+      )
+    | Ret exp_opt -> (
+      let ret_ty = match exp_opt with
+        | None -> RetVoid
+        | Some exp -> RetVal (typecheck_exp tc exp)
+      in
+      match ret_ty with
+        | RetVoid -> tc, true
+        | RetVal ty -> (
+          match to_ret with
+            | RetVoid -> type_error s "Return statement in void function"
+            | RetVal to_ret_ty -> (
+              if subtype tc ty to_ret_ty then
+                tc, true
+              else type_error s "Return expression not subtype of function return type"
+              )
+          )
+      )
+    | Cast _ -> failwith "Cast something you fucker"
 
 
 (* struct type declarations ------------------------------------------------- *)
