@@ -258,9 +258,51 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
       | _ -> type_error e "Proj expression is not a struct"
     )
   | Call (fexp, argexps) -> (
-    failwith "DONT KNOW WHAT TO DO HERE"
+    match typecheck_exp c fexp with
+      | TRef (RFun (argtys, ret_ty)) -> (
+        if List.length argtys <> List.length argexps then
+          type_error e "Wrong number of arguments to function call";
+        let rec check_args (argtys : Ast.ty list) (argexps : Ast.exp node list) : unit =
+          match argtys, argexps with
+            | [], [] -> ()
+            | argty::argtys', argexp::argexps' -> (
+              if subtype c (typecheck_exp c argexp) argty then
+                check_args argtys' argexps'
+              else type_error e "Argument expression not subtype of argument type"
+              )
+            | _, _ -> type_error e "Should never arrive here, check_args"
+        in
+        check_args argtys argexps;
+        match ret_ty with
+          | RetVoid -> failwith "what is the type of a void return?"
+          | RetVal ty -> ty
+        )
+      | _ -> type_error e "Call expression is not a function"
     )
-  | _ -> failwith "todo: implement typecheck_exp"
+  | Bop (bop, exp1, exp2) -> (
+    match bop with 
+    | Eq | Neq -> (
+      let t1 = typecheck_exp c exp1 in
+      let t2 = typecheck_exp c exp2 in
+      if subtype c t1 t2 && subtype c t2 t1 then
+        TBool
+      else type_error e "Expressions in equality comparison not subtypes of each other"
+      )
+    | _ -> (
+      let (t1, t2, t3) = typ_of_binop bop in
+      if subtype c (typecheck_exp c exp1) t1 then
+        if subtype c (typecheck_exp c exp2) t2 then
+          t3
+        else type_error e "Second expression in binary operation not subtype of expected type"
+      else type_error e "First expression in binary operation not subtype of expected type"
+      )
+    )
+  | Uop (uop, exp) -> (
+    let (t1, t2) = typ_of_unop uop in
+    if (typecheck_exp c exp) = t1 then
+      t2
+    else type_error e "Expression in unary operation not of expected type"
+    )
 
 (* statements --------------------------------------------------------------- *)
 
@@ -280,7 +322,6 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
         true: definitely returns 
 
         in the branching statements, both branches must definitely return
-
         Intuitively: if one of the two branches of a conditional does not 
         contain a return statement, then the entier conditional statement might 
         not return.
