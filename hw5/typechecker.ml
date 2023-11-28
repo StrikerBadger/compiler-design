@@ -337,7 +337,96 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
      block typecheck rules.
 *)
 let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.t * bool =
-  failwith "todo: implement typecheck_stmt"
+  let typecheck_block (c:Tctxt.t) (b:Ast.block) : Tctxt.t * bool =
+    let rec check_stmts (c:Tctxt.t) (ss:Ast.block) (returns:bool) : Tctxt.t * bool =
+      match ss with
+        | [] -> c, false
+        | s::ss' -> (
+          let (c', returns) = typecheck_stmt c s to_ret in
+          if returns then
+            check_stmts c' ss' returns
+          else
+            let (c'', returns') = check_stmts c' ss' returns in
+            c'', returns'
+          )
+    in
+    check_stmts c b false
+  in
+  match s.elt with
+    | Decl (id, exp) -> (
+      if lookup_local_option id tc <> None then
+        type_error s ("Variable " ^ id ^ " already declared in this scope")
+      else 
+        add_local tc id (typecheck_exp tc exp), false
+      )
+    | Assn (lhs_exp, rhs_exp) -> (
+      match lhs_exp.elt with
+        | Id id -> (
+          match lookup_local_option id tc with
+            | Some ty -> (
+              if subtype tc (typecheck_exp tc rhs_exp) ty then
+                tc, false
+              else type_error s "Right hand side of assignment not subtype of left hand side"
+              )
+            | None -> (
+              match lookup_global_option id tc with
+                | Some (TRef (RFun (_, _))) | Some (TNullRef (RFun (_, _))) -> 
+                  type_error s "Cannot assign to function"
+                | Some ty -> (
+                  if subtype tc (typecheck_exp tc rhs_exp) ty then
+                    tc, false
+                  else type_error s "Right hand side of assignment not subtype of left hand side"
+                  )
+                | None -> type_error s "Left hand side of assignment not in context"
+              )
+        )
+        | _ -> type_error s "Left hand side of assignment is not an identifier"
+      )
+    | SCall (fexp, argexps) -> (
+      match typecheck_exp tc fexp with
+        | TRef (RFun (argtys, ret_ty)) -> (
+          if List.length argtys <> List.length argexps then
+            type_error s "Wrong number of arguments to function call";
+          let rec check_args (argtys : Ast.ty list) (argexps : Ast.exp node list) : unit =
+            match argtys, argexps with
+              | [], [] -> ()
+              | argty::argtys', argexp::argexps' -> (
+                if subtype tc (typecheck_exp tc argexp) argty then
+                  check_args argtys' argexps'
+                else type_error s "Argument expression not subtype of argument type"
+                )
+              | _, _ -> type_error s "Should never arrive here, check_args"
+          in
+          check_args argtys argexps;
+          match ret_ty with
+            | RetVoid -> tc, false
+            | _ -> type_error s "Call statement to function that returns a value"
+          )
+        | _ -> type_error s "Call expression is not a function"
+      )
+    | If (con_exp, true_block, false_block) -> (
+        match con_exp.elt with
+          | Bop (Eq, exp1, exp2) -> (
+            let t1 = typecheck_exp tc exp1 in
+            let t2 = typecheck_exp tc exp2 in
+            match t1 with
+              | TRef rty | TNullRef rty -> (
+                match t2 with
+                  TRef rty | TNullRef rty -> (
+                    if not @@ subtype tc t2 t1 then
+                      type_error s "Equality comparison between non-subtypes";
+                    (* May need to add ref x to locals here*)
+                    let (_, returns) = typecheck_block tc true_block in
+                    let (_, returns') = typecheck_block tc false_block in
+                    tc, returns && returns'
+                    )
+                  | _ -> type_error s "Equality comparison between non-references"
+                )
+              | _ -> type_error s "Equality comparison between non-references"
+            )
+          | _ -> type_error s "Condition expression in if statement is not an equality comparison"
+      )
+    | _ -> failwith "todo: implement typecheck_stmt"
 
 
 (* struct type declarations ------------------------------------------------- *)
