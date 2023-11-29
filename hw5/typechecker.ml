@@ -236,6 +236,8 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
       in
       match structfields with
         | Some structfields -> (
+            if List.length structfields <> List.length fields then
+              type_error e ("Wrong number of fields in struct");
             let fields =
               List.map (fun (id, exp) -> { fieldName=id; ftyp=(typecheck_exp c exp) }) fields
             in
@@ -439,7 +441,7 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
             match inc_stmt with
               | None -> tc, false
               | Some inc_stmt -> 
-                let (c, _) = typecheck_stmt tc inc_stmt to_ret in
+                let (c, _) = typecheck_stmt c' inc_stmt to_ret in
                 c, false
             )
           | _ -> type_error s "Condition expression in for statement is not of type bool"
@@ -467,10 +469,11 @@ and typecheck_block (c:Tctxt.t) (b:Ast.block) (to_ret:ret_ty) : Tctxt.t * bool =
   let rec check_stmts (c:Tctxt.t) (ss:Ast.block) (returns:bool) : Tctxt.t * bool =
     match ss with
       | [] -> c, false
+      | s::[] -> typecheck_stmt c s to_ret
       | s::ss' -> (
         let (c', returns) = typecheck_stmt c s to_ret in
         if returns then
-          check_stmts c' ss' returns
+          type_error s "Early return"
         else
           let (c'', returns') = check_stmts c' ss' returns in
           c'', returns'
