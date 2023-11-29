@@ -337,21 +337,6 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
      block typecheck rules.
 *)
 let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.t * bool =
-  let typecheck_block (c:Tctxt.t) (b:Ast.block) : Tctxt.t * bool =
-    let rec check_stmts (c:Tctxt.t) (ss:Ast.block) (returns:bool) : Tctxt.t * bool =
-      match ss with
-        | [] -> c, false
-        | s::ss' -> (
-          let (c', returns) = typecheck_stmt c s to_ret in
-          if returns then
-            check_stmts c' ss' returns
-          else
-            let (c'', returns') = check_stmts c' ss' returns in
-            c'', returns'
-          )
-    in
-    check_stmts c b false
-  in
   match s.elt with
     | Decl (id, exp) -> (
       if lookup_local_option id tc <> None then
@@ -416,8 +401,8 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
                     if not @@ subtype tc t2 t1 then
                       type_error s "Equality comparison between non-subtypes";
                     (* May need to add ref x to locals here*)
-                    let (_, returns) = typecheck_block tc true_block in
-                    let (_, returns') = typecheck_block tc false_block in
+                    let (_, returns) = typecheck_block tc true_block to_ret in
+                    let (_, returns') = typecheck_block tc false_block to_ret in
                     tc, returns && returns'
                     )
                   | _ -> type_error s "Equality comparison between non-references"
@@ -429,7 +414,7 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
     | While (con_exp, block) -> (
         match typecheck_exp tc con_exp with
           | TBool -> (
-            let (_, _) = typecheck_block tc block in
+            let (_, _) = typecheck_block tc block to_ret in
             tc,  false
             )
           | _ -> type_error s "Condition expression in while statement is not of type bool"
@@ -450,7 +435,7 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
         in
         match typecheck_exp c' con_exp with
           | TBool -> (
-            let (_, _) = typecheck_block c' block in
+            let (_, _) = typecheck_block c' block to_ret in
             match inc_stmt with
               | None -> tc, false
               | Some inc_stmt -> 
@@ -477,6 +462,21 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
           )
       )
     | Cast _ -> failwith "Cast something you fucker"
+  
+and typecheck_block (c:Tctxt.t) (b:Ast.block) (to_ret:ret_ty) : Tctxt.t * bool =
+  let rec check_stmts (c:Tctxt.t) (ss:Ast.block) (returns:bool) : Tctxt.t * bool =
+    match ss with
+      | [] -> c, false
+      | s::ss' -> (
+        let (c', returns) = typecheck_stmt c s to_ret in
+        if returns then
+          check_stmts c' ss' returns
+        else
+          let (c'', returns') = check_stmts c' ss' returns in
+          c'', returns'
+        )
+  in
+  check_stmts c b false
 
 
 (* struct type declarations ------------------------------------------------- *)
@@ -503,7 +503,23 @@ let typecheck_tdecl (tc : Tctxt.t) id fs  (l : 'a Ast.node) : unit =
     - checks that the function actually returns
 *)
 let typecheck_fdecl (tc : Tctxt.t) (f : Ast.fdecl) (l : 'a Ast.node) : unit =
-  failwith "todo: typecheck_fdecl"
+  let tc_with_args = List.fold_left (fun (ctxt : Tctxt.t) ((argty, argid) : ty * id) ->
+    add_local ctxt argid argty) tc f.args
+  in
+  let rec check_args_for_duplicates (args : (ty * id) list) : unit =
+    match args with
+      | [] -> ()
+      | (_, argid)::args' -> (
+        if List.exists (fun id -> id = argid) (List.map snd args') then
+          type_error l ("Duplicate argument name " ^ argid ^ " in function " ^ f.fname)
+        else check_args_for_duplicates args'
+        )
+  in
+  check_args_for_duplicates f.args;
+  let (_, returns) = typecheck_block tc_with_args f.body f.frtyp in
+  if not returns then
+    type_error l ("Function " ^ f.fname ^ " does not return")
+  else ()
 
 (* creating the typchecking context ----------------------------------------- *)
 
@@ -533,13 +549,45 @@ let typecheck_fdecl (tc : Tctxt.t) (f : Ast.fdecl) (l : 'a Ast.node) : unit =
    constants, but can't mention other global values *)
 
 let create_struct_ctxt (p:Ast.prog) : Tctxt.t =
-  failwith "todo: create_struct_ctxt"
+  let empty_ctxt = { locals=[]; globals=[]; structs=[] } in
+  List.fold_left (fun (ctxt : Tctxt.t) (d : Ast.decl) ->
+    match d with
+      | Gtdecl { elt=(id, fs); loc=l} -> (
+        match lookup_struct_option id ctxt with
+          | Some _ -> type_error { elt=(id, fs); loc=l} ("Duplicate struct type " ^ id)
+          | None -> add_struct ctxt id fs
+        )
+      | _ -> ctxt (* Not a structdecl *)
+    ) empty_ctxt p
 
 let create_function_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
-  failwith "todo: create_function_ctxt"
+  List.fold_left (fun (ctxt : Tctxt.t) (d : Ast.decl) ->
+    match d with
+      | Gfdecl { elt=f; loc=l } -> (
+        match lookup_global_option f.fname ctxt with
+          | Some _ -> type_error { elt=f; loc=l } ("Duplicate function " ^ f.fname)
+          | None -> add_global ctxt f.fname (TRef (RFun (List.map fst f.args, f.frtyp)))
+        )
+      | _ -> ctxt (* Not a functiondecl *)
+    ) tc p
 
 let create_global_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
-  failwith "todo: create_function_ctxt"
+  List.fold_left (fun (ctxt : Tctxt.t) (d : Ast.decl) ->
+    match d with
+      | Gvdecl { elt=gdecl; loc=l } -> (
+        match lookup_global_option gdecl.name ctxt with
+          | Some _ -> type_error { elt=gdecl; loc=l } ("Duplicate global " ^ gdecl.name)
+          | None -> (
+            let ctxt_without_globals = { ctxt with globals=[] } in
+            let ty = typecheck_exp ctxt_without_globals gdecl.init in
+            match ty with
+              | TRef (RFun (_, _)) | TNullRef (RFun (_, _)) -> 
+                type_error { elt=gdecl; loc=l } ("Global " ^ gdecl.name ^ " cannot be a function")
+              | _ -> add_global ctxt gdecl.name ty
+            )
+        )
+      | _ -> ctxt (* Not a globaldecl *)
+    ) tc p
 
 
 (* This function implements the |- prog and the H ; G |- prog 
