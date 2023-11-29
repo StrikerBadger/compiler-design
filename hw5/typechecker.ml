@@ -198,7 +198,7 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
         | Some _ -> type_error e ("Index variable shadows a local")
         | None -> (
           let ctxt_with_index = (add_local c index TInt) in
-          let init_expr_ty = typecheck_exp c initexp in
+          let init_expr_ty = typecheck_exp ctxt_with_index initexp in
           if subtype ctxt_with_index init_expr_ty arrty then
             TRef (RArray arrty)
           else type_error e ("Array init expression not subtype of array type")
@@ -276,7 +276,7 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
         in
         check_args argtys argexps;
         match ret_ty with
-          | RetVoid -> failwith "what is the type of a void return?"
+          | RetVoid -> type_error e "Void functions do not have a return type"
           | RetVal ty -> ty
         )
       | _ -> type_error e "Call expression is not a function"
@@ -366,8 +366,36 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
                   )
                 | None -> type_error s "Left hand side of assignment not in context"
               )
-        )
-        | _ -> type_error s "Left hand side of assignment is not an identifier"
+          )
+        | Proj (exp, id) -> (
+          match typecheck_exp tc exp with
+            | TRef (RStruct sid) -> (
+              match lookup_struct_option sid tc with
+                | None -> type_error s "Struct on which field access was tried is not in context"
+                | Some fields -> (
+                  match lookup_field_option sid id tc with
+                    | None -> type_error s "Tried to access non-existing struct field"
+                    | Some ty -> (
+                      if subtype tc (typecheck_exp tc rhs_exp) ty then
+                        tc, false
+                      else type_error s "Right hand side of assignment not subtype of left hand side"
+                      )
+                  )
+              )
+            | _ -> type_error s "Proj expression is not a struct"
+          )
+        | Index (arr_exp, index_exp) -> (
+          match typecheck_exp tc arr_exp with
+            | TRef (RArray arrty) -> (
+              if typecheck_exp tc index_exp <> TInt then
+                type_error s "Index expression not of type int";
+              if subtype tc (typecheck_exp tc rhs_exp) arrty then
+                tc, false
+              else type_error s "Right hand side of assignment not subtype of left hand side"
+              )
+            | _ -> type_error s "Index expression is not of type array"
+          )
+        | _ -> type_error s "Left hand side of assignment is not assignable"
       )
     | SCall (fexp, argexps) -> (
       match typecheck_exp tc fexp with
@@ -391,27 +419,12 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
           )
         | _ -> type_error s "Call expression is not a function"
       )
-    | If (con_exp, true_block, false_block) -> ( (* NEEDS FIXING *)
-        match con_exp.elt with
-          | Bop (Eq, exp1, exp2) -> (
-            let t1 = typecheck_exp tc exp1 in
-            let t2 = typecheck_exp tc exp2 in
-            match t1 with
-              | TRef rty | TNullRef rty -> (
-                match t2 with
-                  TRef rty | TNullRef rty -> (
-                    if not @@ subtype tc t2 t1 then
-                      type_error s "Equality comparison between non-subtypes";
-                    (* May need to add ref x to locals here*)
-                    let (_, returns) = typecheck_block tc true_block to_ret in
-                    let (_, returns') = typecheck_block tc false_block to_ret in
-                    tc, returns && returns'
-                    )
-                  | _ -> type_error s "Equality comparison between non-references"
-                )
-              | _ -> type_error s "Equality comparison between non-references"
-            )
-          | _ -> type_error s "Condition expression in if statement is not an equality comparison"
+    | If (con_exp, true_block, false_block) -> ( 
+        if typecheck_exp tc con_exp <> TBool then
+          type_error s "Condition expression in if statement is not of type bool";
+        let (_, yes_returns) = typecheck_block tc true_block to_ret in
+        let (_, no_returns) = typecheck_block tc false_block to_ret in
+        tc, yes_returns && no_returns
       )
     | While (con_exp, block) -> (
         match typecheck_exp tc con_exp with
@@ -432,17 +445,17 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
         in
         let c' = check_vdecls tc vdecls in
         let con_exp = match con_exp with
-          | None -> {elt=(CBool true); loc=s.loc}
+          | None -> type_error s "Condition expression in for statement is missing"
           | Some con_exp -> con_exp
         in
         match typecheck_exp c' con_exp with
           | TBool -> (
             let (_, _) = typecheck_block c' block to_ret in
             match inc_stmt with
-              | None -> tc, false
+              | None -> type_error s "Increment statement in for statement is missing"
               | Some inc_stmt -> 
-                let (c, _) = typecheck_stmt c' inc_stmt to_ret in
-                c, false
+                let (_, _) = typecheck_stmt c' inc_stmt to_ret in
+                tc, false
             )
           | _ -> type_error s "Condition expression in for statement is not of type bool"
       )
@@ -463,7 +476,18 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
               )
           )
       )
-    | Cast _ -> failwith "Cast something you fucker"
+    (* This is if? in reality hahaaaa *)
+    | Cast (rty, id, exp, true_block, false_block) -> (
+        match typecheck_exp tc exp with
+          | TNullRef rty' -> (
+            if not (subtype tc (TRef rty') (TRef rty)) then
+              type_error s "Reference in cast not subtype";
+            let (_, yes_returns) = typecheck_block (add_local tc id (TRef rty)) true_block to_ret in
+            let (_, no_returns) = typecheck_block tc false_block to_ret in
+            tc, yes_returns && no_returns
+            )
+          | _ -> type_error s "Expression in cast is not a nullable reference"
+      )
   
 and typecheck_block (c:Tctxt.t) (b:Ast.block) (to_ret:ret_ty) : Tctxt.t * bool =
   let rec check_stmts (c:Tctxt.t) (ss:Ast.block) (returns:bool) : Tctxt.t * bool =
@@ -552,7 +576,6 @@ let typecheck_fdecl (tc : Tctxt.t) (f : Ast.fdecl) (l : 'a Ast.node) : unit =
    constants, but can't mention other global values *)
 
 let create_struct_ctxt (p:Ast.prog) : Tctxt.t =
-  let empty_ctxt = { locals=[]; globals=[]; structs=[] } in
   List.fold_left (fun (ctxt : Tctxt.t) (d : Ast.decl) ->
     match d with
       | Gtdecl { elt=(id, fs); loc=l} -> (
@@ -561,9 +584,10 @@ let create_struct_ctxt (p:Ast.prog) : Tctxt.t =
           | None -> add_struct ctxt id fs
         )
       | _ -> ctxt (* Not a structdecl *)
-    ) empty_ctxt p
+    ) Tctxt.empty p
 
 let create_function_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
+  let tc = { tc with globals=tc.globals @ (List.map (fun (id, (argtys, ret_ty)) -> (id, TRef (RFun (argtys, ret_ty)))) builtins) } in
   List.fold_left (fun (ctxt : Tctxt.t) (d : Ast.decl) ->
     match d with
       | Gfdecl { elt=f; loc=l } -> (
@@ -578,16 +602,9 @@ let create_global_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
   List.fold_left (fun (ctxt : Tctxt.t) (d : Ast.decl) ->
     match d with
       | Gvdecl { elt=gdecl; loc=l } -> (
-        match lookup_global_option gdecl.name ctxt with
-          | Some _ -> type_error { elt=gdecl; loc=l } ("Duplicate global " ^ gdecl.name)
-          | None -> (
-            let ctxt_without_globals = { ctxt with globals=[] } in
-            let ty = typecheck_exp ctxt_without_globals gdecl.init in
-            match ty with
-              | TRef (RFun (_, _)) | TNullRef (RFun (_, _)) -> 
-                type_error { elt=gdecl; loc=l } ("Global " ^ gdecl.name ^ " cannot be a function")
-              | _ -> add_global ctxt gdecl.name ty
-            )
+        if lookup_global_option gdecl.name ctxt <> None then
+          type_error { elt=gdecl; loc=l } ("Duplicate global " ^ gdecl.name);
+        add_global ctxt gdecl.name (typecheck_exp tc gdecl.init)
         )
       | _ -> ctxt (* Not a globaldecl *)
     ) tc p
