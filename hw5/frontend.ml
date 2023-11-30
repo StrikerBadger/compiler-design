@@ -28,7 +28,7 @@ let ( >@ ) x y = y @ x
 let ( >:: ) x y = y :: x
 let lift : (uid * insn) list -> stream = List.rev_map (fun (x,i) -> I (x,i))
 
-(* Build a CFG and collection of global variable definitions from a stream *)
+(* Build a CFG and collection of global variableoat_alloc_array definitions from a stream *)
 let cfg_of_stream (code:stream) : Ll.cfg * (Ll.gid * Ll.gdecl) list  =
     let gs, einsns, insns, term_opt, blks = List.fold_left
       (fun (gs, einsns, insns, term_opt, blks) e ->
@@ -332,10 +332,7 @@ let rec cmp_exp (tc : TypeCtxt.t) (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.ope
      you could write the loop using abstract syntax and then call cmp_stmt to
      compile that into LL code...
   *)
-  | Ast.NewArr (elt_ty, e1, id, e2) ->    
-    let _, size_op, size_code = cmp_exp tc c e1 in
-    let arr_ty, arr_op, alloc_code = oat_alloc_array tc elt_ty size_op in
-    arr_ty, arr_op, size_code >@ alloc_code
+  | Ast.NewArr (elt_ty, e1, id, e2) -> failwith "implement again"
 
    (* STRUCT TASK: complete this code that compiles struct expressions.
       For each field component of the struct
