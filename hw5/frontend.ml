@@ -196,7 +196,15 @@ let oat_alloc_array ct (t:Ast.ty) (size:Ll.operand) : Ll.ty * operand * stream =
    - make sure to calculate the correct amount of space to allocate!
 *)
 let oat_alloc_struct ct (id:Ast.id) : Ll.ty * operand * stream =
-  failwith "TODO: oat_alloc_struct"
+  (* Calculate total size of the struct *)
+  let total_size = Int64.mul 8L @@ Int64.of_int @@ List.length @@ TypeCtxt.lookup id ct in
+
+  let alloc_id, raw_id = gensym "alloc", gensym "raw" in
+  let alloc_ty = cmp_ty ct @@ TRef (RStruct id) in
+  let raw_ty = Ptr I64 in
+  alloc_ty, Id alloc_id, lift
+    [ raw_id, Call(raw_ty, Gid "oat_malloc", [I64, Const total_size])
+    ; alloc_id, Bitcast(raw_ty, Id raw_id, alloc_ty) ]
 
 
 let str_arr_ty s = Array(1 + String.length s, I8)
@@ -332,16 +340,75 @@ let rec cmp_exp (tc : TypeCtxt.t) (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.ope
      you could write the loop using abstract syntax and then call cmp_stmt to
      compile that into LL code...
   *)
-  | Ast.NewArr (elt_ty, e1, id, e2) -> failwith "implement again"
-
+  | Ast.NewArr (elt_ty, e1, id, e2) -> (
+    (* The loop needs:
+    The size of the array: Where does it get it from? 
+    -> we can assign the lengthexpression (e1) to a local variable and use that in the condition
+    The array to index into
+    -> oat_alloc_array gives back LL.ty * operand * stream, we put an ast.id into context together with the operand and type
+    What should the loop look like? given a variable 's' which holds the length of the array
+    and the array 'arr' itself:
+    For (int i = 0; i < s; i = i + 1) {
+      arr[i] = e2 (* e2 is an expression possibly using i and other variables*)
+    }
+    *)
+    let _, size_op, size_code = cmp_exp tc c e1 in
+    let arr_ty, arr_op, alloc_code = oat_alloc_array tc elt_ty size_op in
+    let arr_ast_id = gensym "__tmp_arr__" ^ id in
+    let ctxt_with_array = Ctxt.add c arr_ast_id (Ptr arr_ty, Id arr_ast_id) in
+    let sid = gensym "__len__tmp_arr__" ^ id in
+    let s_decl_ast = Decl (sid, e1) in
+    let decl_ctxt, decl_code = cmp_stmt tc ctxt_with_array (Ptr I64) { elt=s_decl_ast; loc=exp.loc } in
+    let for_vdecls = [(id, { elt=(CInt 0L); loc=exp.loc })] in
+    let arrid_node = { elt=(Id arr_ast_id); loc=exp.loc } in
+    let sid_node = { elt=(Id sid); loc=exp.loc } in
+    let id_node = { elt=(Id id); loc=exp.loc } in
+    let loop_con = Some { elt=(Bop (Lt, id_node, sid_node)); loc=exp.loc } in
+    let loop_inc = 
+      Some { elt=(Assn (id_node, { elt=(Bop (Add, id_node, { elt=(CInt 1L); loc=exp.loc })); loc=exp.loc })); loc=exp.loc }
+    in
+    let index_into_node =
+      { elt=(Index (arrid_node, id_node)); loc=exp.loc }
+    in
+    let loop_body = 
+      [{ elt=(Assn (index_into_node, e2)); loc=exp.loc }]
+    in 
+    let for_loop = For (
+      for_vdecls,
+      loop_con,
+      loop_inc,
+      loop_body
+      )
+    in
+    let new_ctxt, for_loop_code = cmp_stmt tc decl_ctxt arr_ty { elt=for_loop; loc=exp.loc } in
+    arr_ty, arr_op, alloc_code >@ decl_code >@ for_loop_code
+    )
    (* STRUCT TASK: complete this code that compiles struct expressions.
       For each field component of the struct
        - use the TypeCtxt operations to compute getelementptr indices
        - compile the initializer expression
        - store the resulting value into the structure
    *)
-  | Ast.CStruct (id, l) ->
-    failwith "TODO: Ast.CStruct"
+   | Ast.CStruct (struct_ident, field_list) -> 
+    (* Allocate space for struct *)
+    let allocated_struct_ty, allocated_struct_op, allocated_struct_stream = oat_alloc_struct tc struct_ident in
+
+    let combined_streams = List.fold_left (fun acc_stream (field_ident, expr) -> 
+      let field_index_id = gensym "index" in
+      let field_data_ty, field_data_index = TypeCtxt.lookup_field_name struct_ident field_ident tc in
+
+      let converted_ty = cmp_ty tc field_data_ty in 
+
+      let expr_op, expr_code = cmp_exp_as tc c expr converted_ty in
+
+      let index_operand = Ll.Const field_data_index in
+      acc_stream >@ expr_code >@ 
+        [ I(field_index_id, Gep(allocated_struct_ty, allocated_struct_op, [Const 0L; index_operand]))] >@
+        [ I("",  Store(converted_ty, expr_op, Id field_index_id)) ] 
+    ) [] field_list in
+
+    allocated_struct_ty, allocated_struct_op, allocated_struct_stream >@ combined_streams
+
 
   | Ast.Proj (e, id) ->
     let ans_ty, ptr_op, code = cmp_exp_lhs tc c exp in
@@ -362,8 +429,32 @@ and cmp_exp_lhs (tc : TypeCtxt.t) (c:Ctxt.t) (e:exp node) : Ll.ty * Ll.operand *
 
      You will find the TypeCtxt.lookup_field_name function helpful.
   *)
-  | Ast.Proj (e, i) ->
-    failwith "todo: Ast.Proj case of cmp_exp_lhs"
+  | Ast.Proj (expr, field) ->
+    (* Evaluate the structure expression *)
+    let evaluated_struct_ty, evaluated_struct_op, evaluated_struct_code = cmp_exp tc c expr in
+
+    let evaluated_struct_name = match evaluated_struct_ty with
+      | Ptr(Namedt name) -> name
+      | _ -> failwith "Projection on non-struct type"
+
+    in
+
+    let retrieved_field_ty, retrieved_field_index = TypeCtxt.lookup_field_name evaluated_struct_name field tc in
+
+    (* Generate unique identifier for projection index *)
+    let projection_index_id = gensym "proj_index" in
+    let projection_target_type = cmp_ty tc retrieved_field_ty
+    in
+    let bitcast_id = gensym "bitcast_temp" in
+    let final_id, additional_code, final_type = match projection_target_type with
+    | Ptr Ptr _ -> bitcast_id, [I (bitcast_id , Bitcast (projection_target_type, Id projection_index_id, Ptr I64))], I64
+    | _ -> projection_index_id, [], projection_target_type
+    in
+    (final_type,
+    Id final_id,
+    evaluated_struct_code >@ additional_code >@ 
+    [I(projection_index_id, Gep(evaluated_struct_ty, evaluated_struct_op, [Const 0L; Const retrieved_field_index]))] )
+
 
 
   (* ARRAY TASK: Modify this index code to call 'oat_assert_array_length' before doing the 
@@ -374,13 +465,20 @@ and cmp_exp_lhs (tc : TypeCtxt.t) (c:Ctxt.t) (e:exp node) : Ll.ty * Ll.operand *
   *)
   | Ast.Index (e, i) ->
     let arr_ty, arr_op, arr_code = cmp_exp tc c e in
-    let _, ind_op, ind_code = cmp_exp tc c i in
+    let ind_ty, ind_op, ind_code = cmp_exp tc c i in
     let ans_ty = match arr_ty with 
       | Ptr (Struct [_; Array (_,t)]) -> t 
-      | _ -> failwith "Index: indexed into non pointer" in
+      | _ -> 
+        print_endline @@ Llutil.string_of_ty arr_ty;
+        failwith "Index: indexed into non pointer" in
     let ptr_id, tmp_id = gensym "index_ptr", gensym "tmp" in
+    let bitcasted_arr_id = gensym "bitcasted_arr" in
+    let bitcast_arr = lift [(bitcasted_arr_id, Bitcast (arr_ty, arr_op, Ptr I64))] in
+    let call_assert = 
+      lift [("", Call (Void, Gid "oat_assert_array_length", [(Ptr I64, Id bitcasted_arr_id); (I64, ind_op)]))]
+    in
     ans_ty, (Id ptr_id),
-    arr_code >@ ind_code >@ lift
+    arr_code >@ ind_code >@ bitcast_arr >@ call_assert >@ lift
       [ptr_id, Gep(arr_ty, arr_op, [i64_op_of_int 0; i64_op_of_int 1; ind_op]) ]
 
    
@@ -453,8 +551,31 @@ and cmp_stmt (tc : TypeCtxt.t) (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt
        - as in the if-the-else construct, you should jump to the common
          merge label after either block
   *)
-  | Ast.Cast (typ, id, exp, notnull, null) ->
-    failwith "todo: implement Ast.Cast case"
+  | Ast.Cast (cast_type, cast_identifier, expression, not_null_block, null_block) ->
+    (* Convert runtime type to LLVM type *)
+    let llvm_type = cmp_rty tc cast_type in
+    let guard_operand, guard_compilation_code = cmp_exp_as tc c expression (Ptr (llvm_type)) in
+
+    (* Compile null and not-null code blocks *)
+    let null_block_code = cmp_block tc c rt null_block in
+    let label_then, label_else, label_merge = gensym "then_label", gensym "else_label", gensym "merge_label" in
+    let icmp_identifier = gensym "icmp_check" in
+    let alloca_identifier = gensym cast_identifier in
+    let updated_context = Ctxt.add c cast_identifier (Ptr (Ptr (llvm_type)), Ll.Id alloca_identifier) in
+    let not_null_block_code = cmp_block tc updated_context rt not_null_block in
+
+    updated_context, guard_compilation_code 
+      >:: I(icmp_identifier, Icmp (Ne, (Ptr (llvm_type)), guard_operand, Ll.Null))
+      >:: T(Cbr (Id icmp_identifier, label_then, label_else))
+      >:: L label_then 
+      >:: I(alloca_identifier, Alloca (Ptr (llvm_type)))
+      >:: I("", Store (Ptr (llvm_type), guard_operand, Ll.Id alloca_identifier))  
+       >@ not_null_block_code 
+       >:: T(Br label_merge) 
+       >:: L label_else 
+       >@ null_block_code 
+       >:: T(Br label_merge) 
+       >:: L label_merge
 
   | Ast.While (guard, body) ->
      let guard_ty, guard_op, guard_code = cmp_exp tc c guard in
@@ -609,8 +730,24 @@ let rec cmp_gexp c (tc : TypeCtxt.t) (e:Ast.exp node) : Ll.gdecl * (Ll.gid * Ll.
     (Ptr arr_t, GGid gid), (gid, (arr_t, arr_i))::gs
 
   (* STRUCT TASK: Complete this code that generates the global initializers for a struct value. *)  
-  | CStruct (id, cs) ->
-    failwith "todo: Cstruct case of cmp_gexp"
+  | CStruct (structure_identifier, field_expressions) ->
+    (* Sort struct fields based on their index order *)
+    let sorted_field_expressions = List.sort (fun (field1, _) (field2, _) -> 
+        (TypeCtxt.index_of_field structure_identifier field1 tc) - (TypeCtxt.index_of_field structure_identifier field2 tc)
+    ) field_expressions in
+
+    (* Compile expressions for each field and accumulate declarations and streams *)
+    let global_declarations, global_streams = List.fold_right (fun (field_identifier, expression) (acc_declarations, acc_streams) -> 
+        let field_gdeclaration, field_stream = cmp_gexp c tc expression in
+        (field_gdeclaration :: acc_declarations, field_stream @ acc_streams)
+    ) sorted_field_expressions ([], []) in
+
+    (* Generate a unique symbol for the struct *)
+    let global_struct_symbol = gensym "global_struct" in
+
+    (* Return the LLVM type and global declaration with streams *)
+    (Ptr (Namedt structure_identifier), GGid global_struct_symbol), 
+    (global_struct_symbol, (Namedt structure_identifier, GStruct global_declarations))::global_streams
 
   | _ -> failwith "bad global initializer"
 
