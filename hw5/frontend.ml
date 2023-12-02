@@ -352,13 +352,12 @@ let rec cmp_exp (tc : TypeCtxt.t) (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.ope
       arr[i] = e2 (* e2 is an expression possibly using i and other variables*)
     }
     *)
-    let _, size_op, size_code = cmp_exp tc c e1 in
+    let size_ty, size_op, size_code = cmp_exp tc c e1 in
     let arr_ty, arr_op, alloc_code = oat_alloc_array tc elt_ty size_op in
     let arr_ast_id = gensym "__tmp_arr__" ^ id in
     let ctxt_with_array = Ctxt.add c arr_ast_id (Ptr arr_ty, Id arr_ast_id) in
     let sid = gensym "__len__tmp_arr__" ^ id in
-    let s_decl_ast = Decl (sid, e1) in
-    let decl_ctxt, decl_code = cmp_stmt tc ctxt_with_array (Ptr I64) { elt=s_decl_ast; loc=exp.loc } in
+    let right_ctxt = Ctxt.add ctxt_with_array sid (Ptr size_ty, Id sid) in
     let for_vdecls = [(id, { elt=(CInt 0L); loc=exp.loc })] in
     let arrid_node = { elt=(Id arr_ast_id); loc=exp.loc } in
     let sid_node = { elt=(Id sid); loc=exp.loc } in
@@ -380,8 +379,12 @@ let rec cmp_exp (tc : TypeCtxt.t) (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.ope
       loop_body
       )
     in
-    let new_ctxt, for_loop_code = cmp_stmt tc decl_ctxt arr_ty { elt=for_loop; loc=exp.loc } in
-    arr_ty, arr_op, alloc_code >@ decl_code >@ for_loop_code
+    let _, for_loop_code = cmp_stmt tc right_ctxt arr_ty { elt=for_loop; loc=exp.loc } in
+    let alloca_ids = lift
+      [(sid, Alloca size_ty); ("", Store(size_ty, size_op, Id sid));
+      (arr_ast_id, Alloca arr_ty); ("", Store(arr_ty, arr_op, Id arr_ast_id))] 
+    in
+    arr_ty, arr_op, size_code >@ alloc_code >@ alloca_ids >@ for_loop_code
     )
    (* STRUCT TASK: complete this code that compiles struct expressions.
       For each field component of the struct
