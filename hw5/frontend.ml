@@ -284,29 +284,11 @@ let rec cmp_exp (tc : TypeCtxt.t) (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.ope
        of the array struct representation.
   *)
   | Ast.Length e -> (
-    match e.elt with
-      | Id id -> (
-        let t, arr_struct, code = cmp_exp tc c e in
-        match t with
-          | Struct (tys) -> (
-            let len_id = gensym @@ "lengthof" ^ id in
-            let len_pointer = gensym @@ "pointer_lengthof" ^ id in
-            let len_code = code >@ [I(len_id, Load (I64, Id len_pointer));I(len_pointer, Gep(Ptr t, arr_struct, [Const 0L; Const 0L]))] in
-            I64, Id len_id, len_code
-          )
-          | _ -> failwith "Length: id not an array-struct"
-        )
-      | CArr (ty, exps) -> (
-        let len = Int64.of_int @@ List.length exps in
-        I64, Const len, []
-        )
-      | NewArr (ty, lenexp, id, initexp) -> (
-        let len_id = gensym @@ "lengthof" ^ id in
-        let t, len_pointer, code = cmp_exp tc c lenexp in
-        let len_code = code >@ [I(len_id, Load (I64, len_pointer))] in
-        I64, Id len_id, len_code
-        )
-      | _ -> failwith "Length: expression cannot possibly be an array"
+    let t, arr_struct, code = cmp_exp tc c e in
+    let len_id = gensym @@ "lengthof" in
+    let len_pointer = gensym @@ "pointer_lengthof" in
+    let len_code = [I(len_id, Load (Ptr I64, Id len_pointer));I(len_pointer, Gep(t, arr_struct, [Const 0L; Const 0L]))] in
+    I64, Id len_id, code >@ len_code
     )
   | Ast.Index (e, i) ->
     let ans_ty, ptr_op, code = cmp_exp_lhs tc c exp in

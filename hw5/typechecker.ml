@@ -78,15 +78,22 @@ and subtype_ref (c : Tctxt.t) (t1 : Ast.rty) (t2 : Ast.rty) : bool =
         | _ -> false
       )
     | RStruct id2 -> (
-      let structfields2 = lookup_struct id2 c in
+      let fields2 = lookup_struct id2 c in
       match t1 with
         | RStruct id1 -> (
-          let rec check_fields (fs2 : Ast.field list) : bool =
-            match fs2 with
-              | [] -> true
-              | field::fs2' -> (lookup_field_option id1 field.fieldName c = Some field.ftyp) && (check_fields fs2')
+          let fields1 = 
+            match lookup_struct_option id1 c with
+             | Some x -> x
+             | None -> fields2 @ fields2 @ [{ fieldName="poopypants.m incident"; ftyp=TBool }]
           in
-          check_fields structfields2
+            let rec check_fields (fs1 : Ast.field list) (fs2 : Ast.field list) : bool =
+              match fs1, fs2 with
+                | [], [] -> true
+                | fs1, [] -> true
+                | f1::fs1', f2::fs2' -> f1.fieldName = f2.fieldName && f1.ftyp = f2.ftyp && check_fields fs1' fs2'
+                | _ -> false
+            in
+            check_fields fields1 fields2
         )
         | _ -> false
       )
@@ -454,7 +461,9 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
             match inc_stmt with
               | None -> type_error s "Increment statement in for statement is missing"
               | Some inc_stmt -> 
-                let (_, _) = typecheck_stmt c' inc_stmt to_ret in
+                let (_, inc_returns) = typecheck_stmt c' inc_stmt to_ret in
+                if inc_returns then
+                  type_error s "Increment statement returns";
                 tc, false
             )
           | _ -> type_error s "Condition expression in for statement is not of type bool"
@@ -465,7 +474,11 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
         | Some exp -> RetVal (typecheck_exp tc exp)
       in
       match ret_ty with
-        | RetVoid -> tc, true
+        | RetVoid -> 
+          if ret_ty = RetVoid then
+            tc, true
+          else 
+            type_error s "Void return for expected return"
         | RetVal ty -> (
           match to_ret with
             | RetVoid -> type_error s "Return statement in void function"

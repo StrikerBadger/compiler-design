@@ -20,9 +20,10 @@ let rec string_of_ty : ty -> string = function
 
 let sot = string_of_ty
 
-let dptr = function
-  | Ptr t -> t
-  | _ -> failwith "PP: expected pointer type"
+let dptr = fun x ->
+  match x with
+    | Ptr t -> t
+    | _ -> failwith @@ "PP: expected pointer type, was " ^ string_of_ty x
 
 let string_of_operand : operand -> string = function
   | Null    -> "null"
