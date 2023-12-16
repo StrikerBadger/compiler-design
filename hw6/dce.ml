@@ -24,7 +24,15 @@ open Datastructures
 let dce_block (lb:uid -> Liveness.Fact.t) 
               (ab:uid -> Alias.fact)
               (b:Ll.block) : Ll.block =
-  failwith "Dce.dce_block unimplemented"
+  let instruction_is_alive ((u, i):Ll.uid * Ll.insn) =
+    let live_set, alias_map = lb u, ab u in
+    match i with
+      | Call _ -> true 
+      | Store (_, _, (Id uid)) -> 
+        (UidS.mem uid live_set) || ((UidM.find_opt uid alias_map) = Some Alias.SymPtr.MayAlias)
+      | _ -> UidS.mem u live_set
+  in
+  {b with insns=List.filter instruction_is_alive b.insns}
 
 let run (lg:Liveness.Graph.t) (ag:Alias.Graph.t) (cfg:Cfg.t) : Cfg.t =
 

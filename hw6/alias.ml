@@ -34,7 +34,56 @@ type fact = SymPtr.t UidM.t
 
  *)
 let insn_flow ((u,i):uid * insn) (d:fact) : fact =
-  failwith "Alias.insn_flow unimplemented"
+  match i with
+    (* The result of an alloca is always unique *)
+    | Alloca _ -> UidM.add u SymPtr.Unique d
+    (* A pointer RETURNED by load may be aliased *)
+    | Load ((Ptr (Ptr _)), _) -> UidM.add u SymPtr.MayAlias d
+    (* A pointer passed as an argument to store may be aliased *)
+    | Store (Ptr _, src_op , _) -> (
+      match src_op with
+        | Id uid -> UidM.add uid SymPtr.MayAlias d
+        | _ -> d
+    )
+    (* A Pointer returned by a call may be aliased and pointer used as an argument may be aliased *)
+    | Call (_, _, args) -> UidM.add u SymPtr.MayAlias (
+      List.fold_left (fun d arg ->
+        match arg with
+          | Ptr _, Id uid -> UidM.add uid SymPtr.MayAlias d
+          | _ -> d
+      ) d args
+    )
+    (* A Pointer returned by a bitcast may be aliased and pointer used as an argument may be aliased *)
+    | Bitcast (in_ty, src_op, out_ty) -> (
+      match in_ty, out_ty with
+        | Ptr _, Ptr _ -> UidM.add u SymPtr.MayAlias (
+          match src_op with
+            | Id uid -> UidM.add uid SymPtr.MayAlias d
+            | _ -> d
+        )
+        | Ptr _, _ -> (
+          match src_op with
+            | Id uid -> UidM.add uid SymPtr.MayAlias d
+            | _ -> d
+          )
+        | _, Ptr _ -> UidM.add u SymPtr.MayAlias d
+        | _ -> d
+    )
+    (* A Pointer returned by a GEP may be aliased and pointer used as an argument may be aliased *)
+    | Gep (in_ty, src_op, _) -> (
+      match in_ty with
+        | Ptr _ -> UidM.add u SymPtr.MayAlias (
+          match src_op with
+            | Id uid -> UidM.add uid SymPtr.MayAlias d
+            | _ -> d
+        )
+        | _ -> (
+          match src_op with 
+            | Id uid -> UidM.add uid SymPtr.MayAlias d
+            | _ -> d
+          )
+    )
+    | _ -> UidM.add u SymPtr.UndefAlias d
 
 
 (* The flow function across terminators is trivial: they never change alias info *)
@@ -69,7 +118,22 @@ module Fact =
        join of two SymPtr.t facts.
     *)
     let combine (ds:fact list) : fact =
-      failwith "Alias.Fact.combine not implemented"
+      let combine_two_symptr (f1:SymPtr.t) (f2:SymPtr.t) : SymPtr.t =
+        match f1, f2 with
+          | SymPtr.MayAlias, _ -> SymPtr.MayAlias
+          | _, SymPtr.MayAlias -> SymPtr.MayAlias
+          | SymPtr.Unique, SymPtr.Unique -> SymPtr.Unique
+          | SymPtr.UndefAlias, f2 -> f2
+          | f1, SymPtr.UndefAlias -> f1
+      in
+      let merging_facts_function (k:UidM.key) (s1:SymPtr.t option) (s2:SymPtr.t option) =
+        match s1, s2 with
+          | Some f1, Some f2 -> Some (combine_two_symptr f1 f2)
+          | Some f1, None -> Some f1
+          | None, Some f2 -> Some f2
+          | None, None -> None
+      in
+      List.fold_left (fun l r -> UidM.merge merging_facts_function l r) UidM.empty ds
   end
 
 (* instantiate the general framework ---------------------------------------- *)

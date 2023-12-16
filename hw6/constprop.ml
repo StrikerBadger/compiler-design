@@ -37,7 +37,9 @@ type fact = SymConst.t UidM.t
    - Uid of all other instructions are NonConst-out
  *)
 let insn_flow (u,i:uid * insn) (d:fact) : fact =
-  failwith "Constprop.insn_flow unimplemented"
+  match i with 
+    | Binop (u, _, Id uid1, Id uid2) -> 
+      failwith "Constprop.insn_flow unimplemented"
 
 (* The flow function across terminators is trivial: they never change const info *)
 let terminator_flow (t:terminator) (d:fact) : fact = d
